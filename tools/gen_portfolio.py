@@ -27,6 +27,23 @@ BLUE_PALE = "#b6cbec"
 SLATE_PALE = "#e2e8f0"
 AMBER = "#efb358"
 AMBER_DARK = "#b45309"
+WHITE = "#ffffff"         # hottest point of glows and highlight gradients
+AMBER_HI = "#fff7e6"
+TXT_STRONG, TXT_SUB, TXT_OK = "#f8fafc", "#94a3b8", "#86efac"
+NEB = (BLUE, 0.35, "#24467c", 0.45, AMBER_DARK, 0.12)
+GLASS = ("#ffffff", 0.07, 0.015)
+VIGN = ("#000000", 0.55)
+BG_STOPS = ("#070d1c", INK, "#0a1226")
+
+THEME = os.environ.get("THEME", "dark")
+if THEME == "light":
+    BLUE_LIGHT, BLUE_PALE, SLATE_PALE = "#3b6ab5", "#24467c", "#1e293b"
+    AMBER, AMBER_HI, WHITE = "#d97706", "#7c2d12", "#0f172a"
+    TXT_STRONG, TXT_SUB, TXT_OK = "#0f172a", "#475569", "#15803d"
+    NEB = ("#b6cbec", 0.5, "#dbe6f7", 0.7, "#fcd9a8", 0.35)
+    GLASS = ("#ffffff", 0.85, 0.55)
+    VIGN = ("#1e293b", 0.08)
+    BG_STOPS = ("#f8fafc", "#f1f5fb", "#e8eef8")
 
 SANS = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
 MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
@@ -1034,22 +1051,22 @@ def hud():
 
 DEFS = f"""
 <defs>
-  <radialGradient id="gB"><stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="{BLUE_LIGHT}"/><stop offset="1" stop-color="{BLUE_MID}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gP"><stop offset="0" stop-color="#ffffff"/><stop offset="0.35" stop-color="{BLUE_PALE}"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gW"><stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="{SLATE_PALE}" stop-opacity="0.9"/><stop offset="1" stop-color="{SLATE_PALE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gA"><stop offset="0" stop-color="#fff7e6"/><stop offset="0.3" stop-color="{AMBER}"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb1"><stop offset="0" stop-color="{BLUE}" stop-opacity="0.35"/><stop offset="1" stop-color="{BLUE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb2"><stop offset="0" stop-color="#24467c" stop-opacity="0.45"/><stop offset="1" stop-color="#24467c" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb3"><stop offset="0" stop-color="{AMBER_DARK}" stop-opacity="0.12"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gB"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.3" stop-color="{BLUE_LIGHT}"/><stop offset="1" stop-color="{BLUE_MID}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gP"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.35" stop-color="{BLUE_PALE}"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gW"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.3" stop-color="{SLATE_PALE}" stop-opacity="0.9"/><stop offset="1" stop-color="{SLATE_PALE}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gA"><stop offset="0" stop-color="{AMBER_HI}"/><stop offset="0.3" stop-color="{AMBER}"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="neb1"><stop offset="0" stop-color="{NEB[0]}" stop-opacity="{NEB[1]}"/><stop offset="1" stop-color="{NEB[0]}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="neb2"><stop offset="0" stop-color="{NEB[2]}" stop-opacity="{NEB[3]}"/><stop offset="1" stop-color="{NEB[2]}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="neb3"><stop offset="0" stop-color="{NEB[4]}" stop-opacity="{NEB[5]}"/><stop offset="1" stop-color="{NEB[4]}" stop-opacity="0"/></radialGradient>
   <radialGradient id="core"><stop offset="0" stop-color="{BLUE_LIGHT}" stop-opacity="0.35"/><stop offset="0.55" stop-color="{BLUE}" stop-opacity="0.12"/><stop offset="1" stop-color="{BLUE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="vign" cx="0.5" cy="0.45" r="0.75"><stop offset="0.6" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.55"/></radialGradient>
-  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#070d1c"/><stop offset="0.6" stop-color="{INK}"/><stop offset="1" stop-color="#0a1226"/></linearGradient>
-  <linearGradient id="streak" x1="0" x2="1"><stop offset="0" stop-color="{BLUE_PALE}" stop-opacity="0"/><stop offset="0.5" stop-color="#ffffff"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></linearGradient>
-  <linearGradient id="logoFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
-  <linearGradient id="numFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
-  <linearGradient id="numAmber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff3d6"/><stop offset="1" stop-color="{AMBER}"/></linearGradient>
-  <linearGradient id="heroFill" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{BLUE_PALE}"/><stop offset="0.5" stop-color="#ffffff"/><stop offset="1" stop-color="{BLUE_PALE}"/></linearGradient>
-  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.015"/></linearGradient>
+  <radialGradient id="vign" cx="0.5" cy="0.45" r="0.75"><stop offset="0.6" stop-color="{VIGN[0]}" stop-opacity="0"/><stop offset="1" stop-color="{VIGN[0]}" stop-opacity="{VIGN[1]}"/></radialGradient>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{BG_STOPS[0]}"/><stop offset="0.6" stop-color="{BG_STOPS[1]}"/><stop offset="1" stop-color="{BG_STOPS[2]}"/></linearGradient>
+  <linearGradient id="streak" x1="0" x2="1"><stop offset="0" stop-color="{BLUE_PALE}" stop-opacity="0"/><stop offset="0.5" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></linearGradient>
+  <linearGradient id="logoFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
+  <linearGradient id="numFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
+  <linearGradient id="numAmber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{AMBER_HI}"/><stop offset="1" stop-color="{AMBER}"/></linearGradient>
+  <linearGradient id="heroFill" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{BLUE_PALE}"/><stop offset="0.5" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_PALE}"/></linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{GLASS[0]}" stop-opacity="{GLASS[1]}"/><stop offset="1" stop-color="{GLASS[0]}" stop-opacity="{GLASS[2]}"/></linearGradient>
   <linearGradient id="planeB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{BLUE_MID}" stop-opacity="0.22"/><stop offset="1" stop-color="{BLUE}" stop-opacity="0.05"/></linearGradient>
   <linearGradient id="planeA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{AMBER}" stop-opacity="0.28"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0.06"/></linearGradient>
   <linearGradient id="barFill" x1="0" x2="1"><stop offset="0" stop-color="{BLUE_LIGHT}"/><stop offset="1" stop-color="{AMBER}"/></linearGradient>
@@ -1063,14 +1080,14 @@ DEFS = f"""
   .hero2 {{ font-size: 46px; font-weight: 800; letter-spacing: 16px; fill: url(#heroFill); }}
   .tagline {{ font-size: 21px; font-weight: 400; fill: {BLUE_PALE}; font-family: {MONO}; }}
   .kicker {{ font-size: 13px; letter-spacing: 3px; fill: {BLUE_LIGHT}; font-family: {MONO}; opacity: 0.8; }}
-  .h1 {{ font-size: 46px; font-weight: 800; fill: #f8fafc; letter-spacing: -0.5px; }}
-  .h2 {{ font-size: 36px; font-weight: 800; fill: #f8fafc; letter-spacing: -0.5px; }}
-  .sub {{ font-size: 16px; fill: #94a3b8; }}
+  .h1 {{ font-size: 46px; font-weight: 800; fill: {TXT_STRONG}; letter-spacing: -0.5px; }}
+  .h2 {{ font-size: 36px; font-weight: 800; fill: {TXT_STRONG}; letter-spacing: -0.5px; }}
+  .sub {{ font-size: 16px; fill: {TXT_SUB}; }}
   .tag {{ font-size: 13px; font-weight: 600; letter-spacing: 2.5px; fill: {AMBER}; font-family: {MONO}; }}
   .tagb {{ font-size: 13px; font-weight: 600; letter-spacing: 2.5px; fill: {BLUE_LIGHT}; font-family: {MONO}; }}
   .lab {{ font-size: 17px; font-weight: 650; fill: {SLATE_PALE}; }}
   .lab2 {{ font-size: 15px; font-weight: 650; fill: {SLATE_PALE}; }}
-  .labs {{ font-size: 13.5px; fill: #94a3b8; }}
+  .labs {{ font-size: 13.5px; fill: {TXT_SUB}; }}
   .num {{ font-size: 46px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }}
   .nums {{ font-size: 40px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }}
   .barv {{ font-size: 30px; font-weight: 800; fill: url(#numAmber); }}
@@ -1079,7 +1096,7 @@ DEFS = f"""
   .glyph {{ font-size: 26px; fill: {BLUE_PALE}; font-family: 'STIX Two Math', 'Cambria Math', serif; }}
   .cmd {{ font-size: 20px; fill: {SLATE_PALE}; font-family: {MONO}; }}
   .code {{ font-size: 14px; fill: {BLUE_LIGHT}; font-family: {MONO}; }}
-  .codeok {{ font-size: 14px; fill: #86efac; font-family: {MONO}; }}
+  .codeok {{ font-size: 14px; fill: {TXT_OK}; font-family: {MONO}; }}
   .chip {{ font-size: 14px; font-weight: 600; fill: {BLUE_PALE}; font-family: {MONO}; }}
   .chipa {{ font-size: 14px; font-weight: 700; fill: {AMBER}; font-family: {MONO}; }}
   .hud {{ font-size: 14px; font-weight: 700; letter-spacing: 5px; fill: {SLATE_PALE}; }}
@@ -1111,7 +1128,7 @@ def main():
     ]
     svg = "\n".join(body)
     here = os.path.dirname(os.path.abspath(__file__))
-    out = os.path.join(here, "..", "profile", "humanfia-portfolio.svg")
+    out = os.path.join(here, "..", "profile", f"humanfia-portfolio-{THEME}.svg")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(svg)
@@ -1119,4 +1136,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "THEME" in os.environ:
+        main()
+    else:  # build both variants; each run re-seeds the RNG so the two stay frame-for-frame identical
+        import subprocess
+        import sys
+        for theme in ("dark", "light"):
+            subprocess.run([sys.executable, os.path.abspath(__file__)], env={**os.environ, "THEME": theme}, check=True)

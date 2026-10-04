@@ -1,6 +1,10 @@
 <p align="center">
   <a href="https://humanfia.ai">
-    <img src="./humanfia-portfolio.svg" width="100%" alt="Humanfia — we build the flow around the agents. Humanize 2, HOA, KDA, HKA, FlowBench." />
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./humanfia-portfolio-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="./humanfia-portfolio-light.svg">
+      <img src="./humanfia-portfolio-dark.svg" width="100%" alt="Humanfia — we build the flow around the agents. Humanize 2, HOA, KDA, HKA, FlowBench." />
+    </picture>
   </a>
 </p>
 
