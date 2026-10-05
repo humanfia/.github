@@ -33,15 +33,15 @@ jobs:
       - name: Test the generator
         run: python3 -m unittest discover -s tools -p 'test_*.py'
 
-      # Exits non-zero, leaving the profile as it is, if the site's home page or logo can't be read.
-      - name: Generate the banner and README from humanfia.ai
+      # Exits non-zero, leaving the profile as it is, if a page fails other than with a 404 or 410.
+      - name: Generate the banners from humanfia.ai
         run: python3 tools/gen_portfolio.py
 
       - name: Commit if anything changed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git add profile
+          git add profile/humanfia-portfolio-light.svg profile/humanfia-portfolio-dark.svg
           if git diff --cached --quiet; then
             echo "The profile already matches humanfia.ai."
             exit 0
