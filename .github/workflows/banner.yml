@@ -1,5 +1,6 @@
-# Checks the banners in profile/ are what tools/gen_portfolio.py makes, so an edit to one is made
-# in the generator and survives the next rebuild.
+# Tests the banner generator. The banners themselves are generated from the live humanfia.ai by
+# the `profile` workflow, so they are not compared against a fresh build here: the site moves on
+# its own, and that comparison would fail whenever it did.
 
 name: banner
 
@@ -27,7 +28,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: The banners are up to date
-        run: |
-          python3 tools/gen_portfolio.py
-          git diff --exit-code -- profile/
+      - name: Test the generator
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
