@@ -26,8 +26,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The branch, not the triggering commit: a run queued behind another must build on that
+      # run's commit, or its push would not fast-forward.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.ref_name }}
           persist-credentials: false
 
       - name: Test the generator

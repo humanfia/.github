@@ -362,7 +362,7 @@ def parse_loop(name: str, root: Node) -> Loop | None:
                  if len(cells) >= 2 and cells[1].lower().startswith("agent")]
         if len(roles) == 2:
             lede = next((p.text() for p in main.all("p") if p.text()), "")
-            return Loop(name, sentences(lede)[0] if lede else "", roles)
+            return Loop(name, next(iter(sentences(lede)), ""), roles)
     return None
 
 
@@ -380,7 +380,7 @@ def project_facts(f: Facts, nav: list[Menu]) -> None:
             p.stat, p.stat_says = (b.text() if b else ""), (span.text() if span else "")
             main = root.first("main") or root
             lede = main.first(cls="lede") or next((x for x in main.all("p") if x.text()), None)
-            first = sentences(lede.text())[0].rstrip(".") if lede else ""
+            first = next(iter(sentences(lede.text())), "").rstrip(".") if lede else ""
             p.sub = p.sub or first
             p.lede = first if first != p.sub else ""
         f.projects.append(p)

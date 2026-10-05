@@ -120,6 +120,12 @@ class Reading(unittest.TestCase):
         self.assertEqual(f.projects[1], g.Project("KDA", "Kernel Design Agents", "1.39×", "Past the best human entries"))
         self.assertEqual(f.projects[0].lede, "Kernel Design Agents")
 
+    def test_a_page_with_an_empty_lede_still_counts(self) -> None:
+        f = g.Facts(g.parse_logo(LOGO))
+        with mock.patch.object(g, "fetch", return_value='<main><p class="lede"><img src="x"></p></main>'):
+            g.project_facts(f, g.parse_nav(g.dom(NAV)))
+        self.assertEqual([(p.name, p.sub) for p in f.projects], [("Humanize 2", "Agent Flow System"), ("KDA", "")])
+
     def test_feed_reads_authors_and_survives_a_missing_feed(self) -> None:
         with mock.patch.object(g, "fetch", side_effect=lambda p: RSS if "news" in p else None):
             posts = g.latest()
