@@ -12,7 +12,7 @@ and what every humanfia repository inherits rather than copies.
 | [`.github/workflows/uv-python-ci.yml`](.github/workflows/uv-python-ci.yml) | A reusable workflow: the CI of a Python repository built with uv, as below. |
 | [`workflow-templates/`](workflow-templates/) | The starter workflow that calls it, offered under **Actions → New workflow** in every repository of the organization. |
 | [`profile/`](profile/) | The page GitHub shows on the organization's overview tab, with its banner. |
-| [`tools/gen_portfolio.py`](tools/gen_portfolio.py) | Generates the banner, as below. |
+| [`tools/gen_portfolio.py`](tools/gen_portfolio.py) | Generates the banner from humanfia.ai, as below. |
 
 A repository keeps its own copy of a health file only when what it says is particular to that
 repository, as [humanize](https://github.com/humanfia/humanize)'s are. A LICENSE, a README, a
@@ -55,19 +55,47 @@ newer commit, in a pull request of its own.
 
 ## The banner
 
-`profile/humanfia-portfolio-{dark,light}.svg` is a 48 s looping banner (pure SVG + SMIL, no JS),
-one per colour scheme; the profile picks one with `<picture>` + `prefers-color-scheme`, so it
-follows the viewer's GitHub or system theme.
+- `profile/README.md` is the page GitHub shows on the org's overview tab. It holds only the banner, a `<picture>`
+  that picks the light or dark SVG with `prefers-color-scheme`, linked to humanfia.ai. It is written by hand and
+  does not change.
+- `profile/humanfia-portfolio-{light,dark}.svg` is a 120-second explainer in constructivist style, one per colour
+  scheme. It uses flat planes, bars, wedges and one red circle, a single 17° diagonal and heavy block type. The
+  wordmark is built from geometry. It is pure SVG + SMIL on one clock, with no JavaScript, no web fonts and avatars
+  inlined. Its chapters:
+  1. the H assembling and the dot hopping to the i
+  2. the thesis
+  3. the Humanize runtime
+  4. a turn and the runtime's features
+  5. the flows
+  6. one maker-and-checker flow, running
+  7. the projects with their headline numbers
+  8. the latest news and blog posts
+  9. the people
+  10. the address
+- `tools/gen_portfolio.py` reads the live sites and writes both SVGs:
+  - from humanfia.ai: the logo, the home page's headline, manifesto, features and results, the Projects and Flows
+    menus and their pages, `/news/feed.rss` and `/blog/feed.rss`, and About (and Team) for the people
+  - from docs.humanfia.ai: the "how it fits together" bands
 
-`tools/gen_portfolio.py` generates it. All 3D (particles, icosahedron, heat-grid, bars, globe) is
-projected in Python and baked into keyframes. Edit the numbers or scenes there, then rebuild both
-themes (or one, with `THEME=dark|light`):
+  A chapter whose source is missing (a 404 or 410, or markup without the parts it needs) is dropped, and the others
+  share its time. Any other failure exits non-zero and changes nothing.
+- `.github/workflows/profile.yml` runs the generator daily, on the `humanfia-ai-deployed` `repository_dispatch`
+  that humanfia.ai's deploy sends, and by hand. It commits only when an SVG changed.
+
+### Usage
 
 ```bash
-python3 tools/gen_portfolio.py
+python3 tools/gen_portfolio.py                    # both banners
+THEME=dark python3 tools/gen_portfolio.py         # one banner (light|dark)
+SITE=http://localhost:4173 DOCS=http://localhost:5173/humanize python3 tools/gen_portfolio.py   # local previews
+python3 -m unittest discover -s tools -p 'test_*.py'
 ```
 
-The `banner` workflow checks the committed SVGs are what the generator makes.
+The dispatch from humanfia.ai needs a fine-grained token with **Contents: read and write** on `humanfia/.github`.
+Store it as the `ORG_PROFILE_TOKEN` secret in `humanfia/humanfia.ai`. Without it, the daily run still keeps the
+profile current, at most a day late.
+
+The `banner` workflow runs the generator's tests on every change to it.
 
 ## License
 

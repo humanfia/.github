@@ -1,0 +1,55 @@
+# The org profile is generated from humanfia.ai, so it is rebuilt whenever the site may have
+# changed: after every deploy of humanfia.ai (which sends a `humanfia-ai-deployed` dispatch),
+# once a day in case a dispatch went missing, and by hand. A run that changes nothing commits
+# nothing.
+
+name: profile
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  repository_dispatch:
+    types: [humanfia-ai-deployed]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: profile
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # The branch, not the triggering commit: a run queued behind another must build on that
+      # run's commit, or its push would not fast-forward.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+
+      - name: Test the generator
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
+      # Exits non-zero, leaving the profile as it is, if a page fails other than with a 404 or 410.
+      - name: Generate the banners from humanfia.ai
+        run: python3 tools/gen_portfolio.py
+
+      - name: Commit if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add profile/humanfia-portfolio-light.svg profile/humanfia-portfolio-dark.svg
+          if git diff --cached --quiet; then
+            echo "The profile already matches humanfia.ai."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(profile): regenerate from humanfia.ai"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

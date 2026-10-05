@@ -1,1145 +1,1170 @@
 #!/usr/bin/env python3
-"""Generate the animated Humanfia org-profile banner (profile/humanfia-portfolio.svg).
+"""Generate the Humanfia org profile banner from humanfia.ai: a 120-second constructivist explainer.
 
-GitHub renders README images through <img>, so no JavaScript and no external fonts. Every
-3D effect here is computed in Python: particles, wireframes and extruded blocks are projected
-through a perspective camera frame by frame, and the result is written out as SMIL keyframes on
-one shared 48 s clock. Keyframes are thinned with Douglas-Peucker so the file stays small.
+Nothing about Humanfia is written down here. Every run reads the live sites and lays out what it
+finds, chapter by chapter, on one 120 s SMIL clock:
 
-    python3 tools/gen_portfolio.py            # writes profile/humanfia-portfolio.svg
+     1  the mark        /logo.svg: the H assembles from three planes, the red dot rolls in and hops
+     2  the thesis      the home page's headline and manifesto, and About's bet
+     3  the runtime     the Humanize docs' "how it fits together" bands
+     4  a turn          the docs' definition of a turn, and the runtime's features from the home page
+     5  the flows       the nav's Flows menu
+     6  a flow, running the first flow page with exactly two agent roles: a maker and a checker
+     7  the projects    the nav's Projects menu, each page's headline stat, the home page's results
+     8  the latest      /news/feed.rss and /blog/feed.rss
+     9  the people      About's roster, principles and contacts
+    10  the address
+
+A chapter whose source the site does not have (a 404 or 410, or markup without the parts it needs)
+is dropped and the others share its time. Any other failure -- a 403, a 5xx, a timeout -- stops
+the run, so a bad fetch never overwrites a good profile.
+
+The look is constructivist throughout: flat planes, bars, wedges and circles with hard edges, in
+paper, ink and one red; one diagonal; heavy sans type set in bands; planes that slide along their
+axes, bars that extend, a red circle that rolls and drops, and diagonal wipes between chapters.
+GitHub shows README images through <img>, so there is no JavaScript and no web font: motion is
+SMIL, type is the system's heaviest sans, and avatars are inlined.
+
+    python3 tools/gen_portfolio.py              # both banners
+    THEME=dark python3 tools/gen_portfolio.py   # one banner (light|dark)
+    SITE=http://localhost:4173 DOCS=http://localhost:5173/humanize python3 tools/gen_portfolio.py
 """
+
+from __future__ import annotations
+
+import base64
+import html
+import http.client
 import math
 import os
-import random
 import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Callable, Iterator
+from xml.etree import ElementTree as ET
 
-W, H = 1200, 600
-T = 48.0                    # loop length, seconds
-FPS = 12                    # particle sampling rate before thinning
-N = 400                     # particle count
-rng = random.Random(20260720)
+SITE = os.environ.get("SITE", "https://humanfia.ai").rstrip("/")
+DOCS = os.environ.get("DOCS", "https://docs.humanfia.ai/humanize").rstrip("/")
+ROOT = Path(__file__).resolve().parent.parent
+PROFILE = ROOT / "profile"
+SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+ET.register_namespace("", SVG_NS)
+ET.register_namespace("xlink", XLINK_NS)
 
-INK = "#0f172a"
-BLUE = "#2e599e"
-BLUE_MID = "#6e93cf"
-BLUE_LIGHT = "#8daee2"
-BLUE_PALE = "#b6cbec"
-SLATE_PALE = "#e2e8f0"
-AMBER = "#efb358"
-AMBER_DARK = "#b45309"
-WHITE = "#ffffff"         # hottest point of glows and highlight gradients
-AMBER_HI = "#fff7e6"
-TXT_STRONG, TXT_SUB, TXT_OK = "#f8fafc", "#94a3b8", "#86efac"
-NEB = (BLUE, 0.35, "#24467c", 0.45, AMBER_DARK, 0.12)
-GLASS = ("#ffffff", 0.07, 0.015)
-VIGN = ("#000000", 0.55)
-BG_STOPS = ("#070d1c", INK, "#0a1226")
-
-THEME = os.environ.get("THEME", "dark")
-if THEME == "light":
-    BLUE_LIGHT, BLUE_PALE, SLATE_PALE = "#3b6ab5", "#24467c", "#1e293b"
-    AMBER, AMBER_HI, WHITE = "#d97706", "#7c2d12", "#0f172a"
-    TXT_STRONG, TXT_SUB, TXT_OK = "#0f172a", "#475569", "#15803d"
-    NEB = ("#b6cbec", 0.5, "#dbe6f7", 0.7, "#fcd9a8", 0.35)
-    GLASS = ("#ffffff", 0.85, 0.55)
-    VIGN = ("#1e293b", 0.08)
-    BG_STOPS = ("#f8fafc", "#f1f5fb", "#e8eef8")
-
-SANS = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
-MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-
-# ----------------------------------------------------------------------------------- helpers
-
-def clamp(x, a=0.0, b=1.0):
-    return a if x < a else b if x > b else x
+THEMES = {  # light: ink and red on paper; dark: paper and red on ink
+    "light": {"paper": "#f4efe6", "ink": "#16161a", "red": "#d6331f", "mute": "#5f5a54"},
+    "dark": {"paper": "#16161a", "ink": "#ece6da", "red": "#ff5a43", "mute": "#a39d92"},
+}
+BLOCK = "'Arial Black','Helvetica Neue',Helvetica,Arial,sans-serif"  # heavy block type
+SANS = "'Helvetica Neue',Helvetica,Arial,'Segoe UI',sans-serif"
+W, H = 1000, 560   # shown ~830 px wide on GitHub, so 14 px here is never under 11 px there
+T = 120.0          # the loop, seconds
+ANGLE = 17.0       # the one diagonal, degrees
+SLOPE = math.tan(math.radians(ANGLE))
 
 
-def smooth(x):
-    x = clamp(x)
-    return x * x * (3 - 2 * x)
+# ------------------------------------------------------------------------------------ fetching
+
+GONE = (404, 410)  # the only answers that mean "this is not there"
 
 
-def ease(x):
-    x = clamp(x)
-    return 4 * x * x * x if x < 0.5 else 1 - (-2 * x + 2) ** 3 / 2
+def fetch_bytes(url: str) -> bytes | None:
+    """The body at url, or None on 404/410. Any other failure is retried, then stops the run."""
+    req = urllib.request.Request(url, headers={"User-Agent": "humanfia-org-profile"})
+    why = ""
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2 * attempt)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in GONE:
+                return None
+            why = f"HTTP {e.code}"
+        except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, resets, short reads
+            why = f"{type(e).__name__}: {e}"
+    sys.exit(f"gen_portfolio: could not read {url} ({why}); leaving the profile as it is")
 
 
-def lerp(a, b, u):
-    return a + (b - a) * u
+def fetch(path: str) -> str | None:
+    """A page of SITE (or an absolute URL) as text, or None if it is not there."""
+    url = absolute(path)
+    body = fetch_bytes(url)
+    if body is None:
+        return None
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        sys.exit(f"gen_portfolio: {url} is not UTF-8; leaving the profile as it is")
 
 
-def f(v, nd=1):
-    s = f"{v:.{nd}f}"
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
+def need(path: str) -> str:
+    body = fetch(path)
+    if body is None:
+        sys.exit(f"gen_portfolio: {absolute(path)} is gone; leaving the profile as it is")
+    return body
+
+
+def absolute(href: str) -> str:
+    return href if href.startswith("http") else SITE + "/" + href.lstrip("/")
+
+
+# ------------------------------------------------------------------------------------- the DOM
+
+VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+
+
+@dataclass(eq=False)
+class Node:
+    tag: str
+    attrs: dict[str, str]
+    kids: list[Node | str] = field(default_factory=list)
+
+    @property
+    def classes(self) -> list[str]:
+        return self.attrs.get("class", "").split()
+
+    def iter(self) -> Iterator[Node]:
+        yield self
+        for k in self.kids:
+            if isinstance(k, Node):
+                yield from k.iter()
+
+    def all(self, tag: str | None = None, cls: str | None = None) -> list[Node]:
+        return [x for x in self.iter() if x is not self and (tag is None or x.tag == tag)
+                and (cls is None or cls in x.classes)]
+
+    def first(self, tag: str | None = None, cls: str | None = None) -> Node | None:
+        return next(iter(self.all(tag, cls)), None)
+
+    def text(self, skip: tuple[str, ...] = ()) -> str:
+        def walk(node: Node) -> Iterator[str]:
+            for k in node.kids:
+                if isinstance(k, str):
+                    yield k
+                elif k.tag not in skip:
+                    yield " " if k.tag == "br" else ""
+                    yield from walk(k)
+        return " ".join("".join(walk(self)).split())
+
+
+class _Builder(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.root = Node("#root", {})
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        node = Node(tag, {k: v or "" for k, v in attrs})
+        self.stack[-1].kids.append(node)
+        if tag not in VOID:
+            self.stack.append(node)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.stack[-1].kids.append(Node(tag, {k: v or "" for k, v in attrs}))
+
+    def handle_endtag(self, tag: str) -> None:
+        for i in range(len(self.stack) - 1, 0, -1):
+            if self.stack[i].tag == tag:
+                del self.stack[i:]
+                return
+
+    def handle_data(self, data: str) -> None:
+        if self.stack[-1].tag not in ("script", "style"):
+            self.stack[-1].kids.append(data)
+
+
+def dom(page: str) -> Node:
+    b = _Builder()
+    b.feed(page)
+    return b.root
+
+
+# ------------------------------------------------------------------------------------- the nav
+
+@dataclass
+class Menu:
+    label: str
+    href: str = ""
+    groups: list[tuple[str, list[tuple[str, str]]]] = field(default_factory=list)  # (title, [(label, href)])
+
+    @property
+    def items(self) -> list[tuple[str, str]]:
+        return [it for _, its in self.groups for it in its]
+
+
+def parse_nav(root: Node) -> list[Menu]:
+    """VitePress's desktop nav bar: top-level links, and flyouts with their (titled) groups."""
+    nav = next((x for x in root.all("nav") if "VPNavBarMenu" in x.classes), None)
+    out: list[Menu] = []
+    for x in nav.iter() if nav else []:
+        if "VPFlyout" in x.classes:
+            button = x.first("button")
+            menu = Menu(button.text() if button else "")
+            for grp in x.all(cls="VPMenuGroup") or [x]:
+                title = grp.first(cls="title") if grp is not x else None
+                links = [(a.text(), a.attrs.get("href", "")) for a in grp.all("a") if a.text()]
+                menu.groups.append((title.text() if title else "", links))
+            out.append(menu)
+        elif x.tag == "a" and "VPNavBarMenuLink" in x.classes:
+            out.append(Menu(x.text(), x.attrs.get("href", "")))
+    return out
+
+
+def find(nav: list[Menu], label: str) -> Menu | None:
+    return next((m for m in nav if m.label.lower() == label.lower()), None)
+
+
+# ----------------------------------------------------------------------------------- the facts
+
+@dataclass
+class Logo:
+    viewbox: tuple[float, float, float, float]
+    body: str                                  # the mark's elements, minus the dot, uncoloured
+    dot: tuple[float, float, float] | None     # cx, cy, r in viewBox units
+
+
+@dataclass
+class Band:
+    title: str
+    about: str
+    chips: list[tuple[str, str]]               # (name, small note)
+    down: str = ""                             # what passes from this band to the next
+
+
+@dataclass
+class Project:
+    name: str
+    sub: str
+    stat: str = ""
+    stat_says: str = ""
+    lede: str = ""
+
+
+@dataclass
+class Post:
+    kind: str
+    title: str
+    href: str
+    when: float
+    date: str
+    by: str = ""
+
+
+@dataclass
+class Person:
+    name: str
+    handle: str
+    face: str = ""                             # a data: URI, or "" for initials
+
+
+@dataclass
+class Loop:
+    name: str
+    says: str
+    roles: list[tuple[str, str]]               # (role, what it does)
+
+
+@dataclass
+class Facts:
+    logo: Logo
+    kicker: str = ""
+    headline: str = ""
+    manifesto: list[str] = field(default_factory=list)
+    bet: str = ""
+    bands: list[Band] = field(default_factory=list)
+    features: list[tuple[str, str]] = field(default_factory=list)
+    flows: list[tuple[str, list[str]]] = field(default_factory=list)
+    loop: Loop | None = None
+    projects: list[Project] = field(default_factory=list)
+    results: list[tuple[str, str]] = field(default_factory=list)
+    posts: list[Post] = field(default_factory=list)
+    people: list[Person] = field(default_factory=list)
+    people_intro: str = ""
+    principles: list[str] = field(default_factory=list)
+    contact: list[tuple[str, str]] = field(default_factory=list)  # (what for, where)
+
+
+def sentences(s: str) -> list[str]:
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+(?=[A-Z])", s) if x.strip()]
+
+
+def home_facts(f: Facts, root: Node) -> None:
+    hero = root.first("h1")
+    f.headline = hero.text() if hero else ""
+    if not f.headline:
+        title = root.first("title")
+        f.headline = title.text().split(" — ", 1)[-1] if title else ""
+    hero_box = next((s for s in root.all("section") if hero is not None and hero in s.iter()), None)
+    kick = hero_box.first(cls="h-kicker") if hero_box else None
+    f.kicker = kick.text() if kick else ""
+    manifesto = root.first(cls="h-manifesto-text")
+    f.manifesto = sentences(manifesto.text()) if manifesto else []
+    f.features = [(h.text(), p.text()) for feat in root.all(cls="h-feature")
+                  for h, p in [(feat.first("h3"), feat.first("p"))] if h and p]
+    f.results = [(lab.text(), num.text()) for tile in root.all(cls="h-tile")
+                 for lab, num in [(tile.first(cls="h-tile-label"), tile.first(cls="h-tile-num"))] if lab and num]
+
+
+def docs_facts(f: Facts, root: Node) -> None:
+    """The Humanize docs' "how it fits together": bands of chips, and what passes between them."""
+    arch = root.first(cls="arch")
+    for el in arch.iter() if arch else []:
+        if el.tag == "section" and "band" in el.classes:
+            h, p = el.first("h3"), el.first("p")
+            chips = [(li.text(skip=("small",)), small.text() if small else "")
+                     for li in el.all("li") for small in [li.first("small")]]
+            f.bands.append(Band(h.text() if h else "", p.text() if p else "", chips))
+        elif el.tag == "p" and "down" in el.classes and f.bands:
+            f.bands[-1].down = el.text()
+
+
+def flow_facts(f: Facts, nav: list[Menu]) -> None:
+    menu = find(nav, "Flows")
+    groups: list[tuple[str, list[tuple[str, str]]]] = []
+    if menu is not None:
+        groups = [(t, [(lab, h) for lab, h in its if h.rstrip("/").rsplit("/", 1)[-1] not in ("", "flows")])
+                  for t, its in menu.groups]
+    else:
+        index = fetch("/flows/")
+        if index:
+            links = [(a.text(), a.attrs.get("href", "")) for a in dom(index).all("a")
+                     if re.fullmatch(r"(?:https?://[^/]+)?/flows/[a-z0-9-]+/?", a.attrs.get("href", ""))]
+            groups = [("", list(dict.fromkeys(links)))]
+    groups = [(t, its) for t, its in groups if its]
+    f.flows = [(t, [lab for lab, _ in its]) for t, its in groups]
+    # The loop to run: a maker and a checker -- the first flow in a group that says so, whose page
+    # names exactly two agent roles.
+    for _, its in [gr for gr in groups if re.search(r"check|review", gr[0], re.I)]:
+        for lab, href in its:
+            page = fetch(href)
+            loop = parse_loop(lab, dom(page)) if page else None
+            if loop:
+                f.loop = loop
+                return
+
+
+def parse_loop(name: str, root: Node) -> Loop | None:
+    main = root.first("main") or root
+    for table in main.all("table"):
+        head = [th.text().lower() for th in table.all("th")]
+        if not head or head[0] != "role":
+            continue
+        roles = [(cells[0], cells[-1]) for tr in table.all("tr") for cells in [[td.text() for td in tr.all("td")]]
+                 if len(cells) >= 2 and cells[1].lower().startswith("agent")]
+        if len(roles) == 2:
+            lede = next((p.text() for p in main.all("p") if p.text()), "")
+            return Loop(name, next(iter(sentences(lede)), ""), roles)
+    return None
+
+
+def project_facts(f: Facts, nav: list[Menu]) -> None:
+    menu = find(nav, "Projects")
+    for label, href in menu.items if menu else []:
+        name, _, tail = label.partition(":")
+        p = Project(name.strip(), tail.strip())
+        page = fetch(href)
+        if page:
+            root = dom(page)
+            strip = root.first(cls="stat-strip")
+            first = strip.first("div") if strip else None
+            b, span = (first.first("b"), first.first("span")) if first else (None, None)
+            p.stat, p.stat_says = (b.text() if b else ""), (span.text() if span else "")
+            main = root.first("main") or root
+            lede = main.first(cls="lede") or next((x for x in main.all("p") if x.text()), None)
+            first = next(iter(sentences(lede.text())), "").rstrip(".") if lede else ""
+            p.sub = p.sub or first
+            p.lede = first if first != p.sub else ""
+        f.projects.append(p)
+
+
+def feed(path: str, kind: str) -> list[Post]:
+    body = fetch(path)
+    if not body:
+        return []
+    try:
+        channel = ET.fromstring(body).find("channel")
+    except ET.ParseError:
+        return []
+    posts = []
+    for it in channel.findall("item") if channel is not None else []:
+        try:
+            d = parsedate_to_datetime(it.findtext("pubDate") or "")
+        except (TypeError, ValueError):
+            continue
+        by = it.findtext("{http://purl.org/dc/elements/1.1/}creator") or it.findtext("author") or ""
+        posts.append(Post(kind, (it.findtext("title") or "").strip(), it.findtext("link") or "",
+                          d.timestamp(), f"{d:%b} {d.day}, {d.year}", by.strip()))
+    return posts
+
+
+def latest(n: int = 5) -> list[Post]:
+    posts = feed("/news/feed.rss", "NEWS") + feed("/blog/feed.rss", "BLOG")
+    unique = {p.href: p for p in posts}.values()
+    return sorted(unique, key=lambda p: (-p.when, p.title))[:n]
+
+
+def people_facts(f: Facts, nav: list[Menu]) -> None:
+    """The roster on About (and on Team, while the site still has one), its principles and contacts."""
+    seen: dict[str, Person] = {}
+    for href in [m.href for m in nav if m.label.lower() in ("about", "team") and m.href]:
+        page = fetch(href)
+        if not page:
+            continue
+        root = dom(page)
+        for card in root.all():
+            if not {"person", "founder"} & set(card.classes):
+                continue
+            gh = next((a.attrs["href"] for a in card.all("a")
+                       if re.fullmatch(r"https://github\.com/[\w-]+/?", a.attrs.get("href", ""))), "")
+            handle = gh.rstrip("/").rsplit("/", 1)[-1]
+            named = card.first(cls="person-name") or card.first("h3")
+            name = named.text(skip=("span", "a")) if named else ""
+            face = card.first("img")
+            if name and handle and handle not in seen:
+                seen[handle] = Person(name, handle, face.attrs.get("src", "") if face else "")
+        lede = root.first(cls="lede")
+        f.people_intro = f.people_intro or (lede.text() if lede else "")
+        principles = root.first(cls="principles")
+        f.principles = f.principles or [b.text() for li in (principles.all("li") if principles else [])
+                                        for b in [li.first("b")] if b]
+        contact = root.first(cls="contact")
+        f.contact = f.contact or [(b.text(), absolute(a.attrs.get("href", "")).split("//", 1)[-1].rstrip("/"))
+                                  for a in (contact.all("a") if contact else []) for b in [a.first("b")] if b]
+        f.bet = f.bet or next((s for p in (root.first("main") or root).all("p") for s in sentences(p.text())
+                               if re.search(r"\bloop is what lasts\b", s)), "")
+    f.people = list(seen.values())
+    for p in f.people:
+        p.face = avatar(p.face)
+
+
+def avatar(src: str) -> str:
+    """A small copy of a GitHub avatar, inlined, since an SVG shown through <img> loads nothing."""
+    if not src.startswith("https://avatars.githubusercontent.com/"):
+        return ""
+    url = re.sub(r"([?&])s=\d+", r"\1s=48", src) if "s=" in src else src + ("&" if "?" in src else "?") + "s=48"
+    body = fetch_bytes(url)
+    if not body:
+        return ""
+    mime = "image/png" if body[:4] == b"\x89PNG" else "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(body).decode()}"
+
+
+def gather() -> Facts:
+    logo = parse_logo(need("/logo.svg"))
+    home = dom(need("/"))
+    nav = parse_nav(home)
+    if not nav:
+        sys.exit("gen_portfolio: found no nav on the home page; leaving the profile as it is")
+    f = Facts(logo)
+    home_facts(f, home)
+    docs = fetch(DOCS + "/")
+    if docs:
+        docs_facts(f, dom(docs))
+    flow_facts(f, nav)
+    project_facts(f, nav)
+    f.posts = latest()
+    people_facts(f, nav)
+    return f
+
+
+# ------------------------------------------------------------------------------------- the logo
+
+def _matrix(transform: str) -> tuple[float, ...]:
+    m: tuple[float, ...] = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for op, args in re.findall(r"(\w+)\s*\(([^)]*)\)", transform or ""):
+        v = [float(x) for x in re.split(r"[\s,]+", args.strip()) if x]
+        if op == "matrix":
+            k: tuple[float, ...] = tuple(v)
+        elif op == "translate":
+            k = (1, 0, 0, 1, v[0], v[1] if len(v) > 1 else 0)
+        elif op == "scale":
+            k = (v[0], 0, 0, v[1] if len(v) > 1 else v[0], 0, 0)
+        elif op == "rotate":
+            c, s = math.cos(math.radians(v[0])), math.sin(math.radians(v[0]))
+            k = (c, s, -s, c, 0, 0)
+            if len(v) == 3:
+                k = _mul(_mul((1, 0, 0, 1, v[1], v[2]), k), (1, 0, 0, 1, -v[1], -v[2]))
+        else:
+            continue
+        m = _mul(m, k)
+    return m
+
+
+def _mul(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, ...]:
+    return (a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3],
+            a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5])
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def parse_logo(svg: str) -> Logo:
+    root = ET.fromstring(svg)
+    # Keep only SVG elements and plain or xlink attributes: editor namespaces (inkscape:, sodipodi:)
+    # would otherwise come out under prefixes the banner never declares.
+    ours = ("{" + SVG_NS + "}", "{" + XLINK_NS + "}")
+    for el in root.iter():
+        for k in [k for k in el.attrib if k.startswith("{") and not k.startswith(ours)]:
+            del el.attrib[k]
+    vb = tuple(float(x) for x in re.split(r"[\s,]+", root.get("viewBox", "0 0 96 108").strip()))
+    parents = {c: p for p in root.iter() for c in p}
+    for el in list(root.iter()):
+        foreign = el.tag.startswith("{") and not el.tag.startswith("{" + SVG_NS + "}")
+        if el in parents and (foreign or _local(el.tag) in ("title", "desc", "script", "metadata", "style")):
+            parents[el].remove(el)
+    circles = [el for el in root.iter() if _local(el.tag) == "circle"]
+    named = [el for el in root.iter() if "dot" in f"{el.get('id', '')} {el.get('class', '')}".lower()]
+    target = (named or circles or [None])[-1]
+    dot = None
+    if target is not None:
+        c = target if _local(target.tag) == "circle" else next(
+            (e for e in target.iter() if _local(e.tag) == "circle"), None)
+        if c is not None:
+            m, node = _matrix(c.get("transform", "")), c
+            while node in parents:
+                node = parents[node]
+                m = _mul(_matrix(node.get("transform", "")), m)
+            cx, cy, r = (float(c.get(k, "0")) for k in ("cx", "cy", "r"))
+            dot = (m[0] * cx + m[2] * cy + m[4], m[1] * cx + m[3] * cy + m[5], r * math.sqrt(abs(m[0] * m[3] - m[1] * m[2])))
+            parents[target].remove(target)
+    body = "".join(ET.tostring(el, encoding="unicode") for el in root)
+    body = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", body)
+    body = re.sub(r'\bid="([^"]+)"', r'id="logo-\1"', body)
+    body = re.sub(r'(url\(#|href="#)', r"\1logo-", body)
+    body = re.sub(r'\s(?:fill|class)="[^"]*"', "", body)  # the banner inks the mark for its theme
+    return Logo(vb, body, dot)  # type: ignore[arg-type]
+
+
+# ----------------------------------------------------------------------------------- type & time
+
+_NARROW, _WIDE = set("ijlrtfI.,:;'|!()· "), set("mwMW@")
+
+
+def width(s: str, size: float, heavy: bool = False) -> float:
+    """A conservative advance width for the system sans (heavy: Arial Black / Helvetica Bold)."""
+    k = 1.2 if heavy else 1.0
+    return k * size * sum(0.30 if c in _NARROW else 0.88 if c in _WIDE else 0.70 if c.isupper() or c.isdigit()
+                          else 0.56 for c in s)
+
+
+def fit(s: str, size: float, room: float, heavy: bool = False) -> str:
+    if width(s, size, heavy) <= room:
+        return s
+    while s and width(s + "…", size, heavy) > room:
+        s = s[:-1]
+    return s.rstrip(" ,:;—-") + "…"
+
+
+def wrap(s: str, size: float, room: float, lines: int, heavy: bool = False) -> list[str]:
+    out, words = [], s.split()
+    while words and len(out) < lines:
+        line = words.pop(0)
+        while words and width(line + " " + words[0], size, heavy) <= room:
+            line += " " + words.pop(0)
+        out.append(line)
+    if words:
+        out[-1] = out[-1] + " " + " ".join(words)
+    return [fit(x, size, room, heavy) for x in out]
+
+
+def esc(s: str) -> str:
+    return html.escape(s, quote=True)
+
+
+def n(v: float) -> str:
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
     return "0" if s in ("-0", "") else s
 
 
-def kt(t):
-    if t <= 0:
-        return "0"
-    if t >= T:
-        return "1"
-    return f"{t / T:.4f}".rstrip("0")[1:]
+def text(x: float, y: float, s: str, cls: str, extra: str = "") -> str:
+    return f'<text x="{n(x)}" y="{n(y)}" class="{cls}"{extra}>{esc(s)}</text>'
 
 
-def anim(attr, pairs, calc="linear", extra=""):
-    """<animate> on the global clock. pairs = [(time, value), ...]; times are clamped, padded."""
-    pairs = sorted(pairs, key=lambda p: p[0])
-    if pairs[0][0] > 0:
-        pairs.insert(0, (0, pairs[0][1]))
-    if pairs[-1][0] < T:
-        pairs.append((T, pairs[-1][1]))
-    keys = ";".join(kt(t) for t, _ in pairs)
-    vals = ";".join(str(v) for _, v in pairs)
-    return (f'<animate attributeName="{attr}" dur="{f(T)}s" repeatCount="indefinite" '
-            f'calcMode="{calc}" keyTimes="{keys}" values="{vals}"{extra}/>')
+def _keys(pts: list[tuple[float, str]]) -> tuple[str, str]:
+    pts = sorted(((min(max(t, 0.0), T), v) for t, v in pts), key=lambda p: p[0])
+    if pts[0][0] > 0:
+        pts.insert(0, (0.0, pts[0][1]))
+    if pts[-1][0] < T:
+        pts.append((T, pts[-1][1]))
+    return ";".join(v for _, v in pts), ";".join(f"{t / T:.4f}".rstrip("0").rstrip(".") for t, _ in pts)
 
 
-def anim_tf(kind, pairs, additive=False):
-    pairs = sorted(pairs, key=lambda p: p[0])
-    if pairs[0][0] > 0:
-        pairs.insert(0, (0, pairs[0][1]))
-    if pairs[-1][0] < T:
-        pairs.append((T, pairs[-1][1]))
-    keys = ";".join(kt(t) for t, _ in pairs)
-    vals = ";".join(str(v) for _, v in pairs)
-    add = ' additive="sum"' if additive else ""
-    return (f'<animateTransform attributeName="transform" type="{kind}" dur="{f(T)}s" '
-            f'repeatCount="indefinite" keyTimes="{keys}" values="{vals}"{add}/>')
+def anim(attr: str, pts: list[tuple[float, float]] | list[tuple[float, str]], discrete: bool = False) -> str:
+    """One attribute on the one clock: (seconds, value) keyframes, linear (or discrete) between."""
+    values, times = _keys([(t, v if isinstance(v, str) else n(v)) for t, v in pts])
+    mode = ' calcMode="discrete"' if discrete else ""
+    return (f'<animate attributeName="{attr}" dur="{n(T)}s" repeatCount="indefinite"{mode} '
+            f'values="{values}" keyTimes="{times}"/>')
 
 
-def window(t_in, t_out, fade=0.6, peak=1.0):
-    return [(0, 0), (t_in, 0), (t_in + fade, peak), (t_out - fade, peak), (t_out, 0)]
+def move(pts: list[tuple[float, float, float]]) -> str:
+    values, times = _keys([(t, f"{n(x)} {n(y)}") for t, x, y in pts])
+    return (f'<animateTransform attributeName="transform" type="translate" dur="{n(T)}s" '
+            f'repeatCount="indefinite" values="{values}" keyTimes="{times}"/>')
 
 
-def reveal(body, t_in, t_out, dy=14, fade=0.6, dx=0):
-    """Fade + slide a block in at t_in and out at t_out."""
-    op = anim("opacity", window(t_in, t_out, fade))
-    mv = anim_tf("translate", [(0, f"{dx} {dy}"), (t_in, f"{dx} {dy}"), (t_in + fade * 1.4, "0 0"),
-                               (t_out - fade, "0 0"), (t_out, f"{-dx} {-dy * 0.6:.0f}")])
-    return f'<g opacity="0">{op}{mv}{body}</g>'
+def on(t0: float, t1: float) -> str:
+    """Shown from t0 to t1, hard-switched: the wipe covers the cut."""
+    if t0 <= 0:
+        return anim("opacity", [(0, 1), (t1, 0)], discrete=True)
+    return anim("opacity", [(0, 0), (t0, 1), (t1, 0)], discrete=True)
 
 
-def esc(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def enter(t: float, dx: float, dy: float, d: float = 0.5) -> str:
+    """Slide in along an axis and lock: a plane arriving, mechanically."""
+    return move([(0, dx, dy), (t, dx, dy), (t + d, 0, 0)])
 
 
-def text(x, y, s, cls, anchor="start", extra=""):
-    a = f' text-anchor="{anchor}"' if anchor != "start" else ""
-    return f'<text x="{f(x)}" y="{f(y)}" class="{cls}"{a}{extra}>{esc(s)}</text>'
+def appear(t: float, d: float = 0.2) -> str:
+    return anim("opacity", [(0, 0), (t, 0), (t + d, 1)])
 
 
-# ------------------------------------------------------------------------------------ camera
+def extend(attr: str, t: float, to: float, d: float = 0.6) -> str:
+    """A bar extending from nothing to its length."""
+    return anim(attr, [(0, 0), (t, 0), (t + d, to)])
 
-def cam(p, yaw, pitch, cx, cy, dist=1000.0, focal=1000.0):
-    x, y, z = p
-    cyw, syw = math.cos(yaw), math.sin(yaw)
-    x1 = x * cyw + z * syw
-    z1 = -x * syw + z * cyw
-    cp, sp = math.cos(pitch), math.sin(pitch)
-    y2 = y * cp - z1 * sp
-    z2 = y * sp + z1 * cp
-    s = focal / (dist + z2)
-    return cx + x1 * s, cy + y2 * s, s, z2
 
+def g(content: str, *anims: str) -> str:
+    return f"<g>{''.join(anims)}{content}</g>"
 
-def rot_y(p, a):
-    x, y, z = p
-    c, s = math.cos(a), math.sin(a)
-    return (x * c + z * s, y, -x * s + z * c)
 
+def slab(x: float, y: float, s: str, size: float, cls: str, fill: str, pad: float = 12, angle: float = 0.0) -> str:
+    """Heavy type reversed out of a bar: the poster's basic unit."""
+    w, h = width(s, size, True) + 2 * pad, size * 1.4
+    rot = f' transform="rotate({n(-angle)} {n(x)} {n(y)})"' if angle else ""
+    return (f'<g{rot}><rect x="{n(x)}" y="{n(y - h * 0.74)}" width="{n(w)}" height="{n(h)}" class="{fill}"/>'
+            f'{text(x + pad, y, s, cls)}</g>')
 
-def rot_x(p, a):
-    x, y, z = p
-    c, s = math.cos(a), math.sin(a)
-    return (x, y * c - z * s, y * s + z * c)
 
+def kicker(x: float, y: float, num: int, label: str) -> str:
+    return (f'<rect x="{n(x)}" y="{n(y - 13)}" width="14" height="14" class="red"/>'
+            + text(x + 24, y, fit(f"{num:02d} · {label.upper()}", 15, 600), "kick"))
 
-def rot_z(p, a):
-    x, y, z = p
-    c, s = math.cos(a), math.sin(a)
-    return (x * c - y * s, x * s + y * c, z)
 
+# ------------------------------------------------------------------------------------ chapters
 
-# ----------------------------------------------------------------------------- the H logo
+Draw = Callable[[float, float], str]
 
-LOGO_PATHS = [
-    ("M0 0 C2.7 2.5 4.9 5 7 8 C7.5 8.7 8.1 9.4 8.6 10.1 C16.1 20.4 16.4 31 16.4 43.3 C16.4 45 16.4 46.6 16.4 48.2 C16.4 51.7 16.4 55.2 16.4 58.7 C16.4 64.2 16.4 69.8 16.4 75.3 C16.5 88 16.5 100.7 16.5 113.4 C16.5 125.1 16.5 136.8 16.6 148.5 C16.6 154 16.6 159.5 16.6 165 C16.6 168.4 16.6 171.8 16.6 175.2 C16.6 176.8 16.6 178.3 16.6 179.9 C16.6 182.1 16.6 184.2 16.6 186.4 C16.6 187.6 16.6 188.8 16.6 190.1 C17 193 17 193 18.5 194.9 C21 196.7 23 196.2 26 196 C28.2 195.1 30.3 194.1 32.4 193.1 C35.3 191.9 38 191.2 40.9 190.6 C45.9 189.4 49.8 187.7 54.3 185.3 C58.6 183.2 63.2 182.2 67.8 181 C70.4 180.2 72.5 179.3 74.9 178 C79.8 175.3 85.2 174.3 90.5 173 C94 172 94 172 96.4 170.5 C99.8 168.5 103.3 167.9 107.1 167.1 C112.3 166 116.9 164.8 121.6 162.4 C127 159.7 132.4 158.8 138.3 157.9 C141.3 157.2 143.2 156.5 145.8 155.1 C150.5 152.6 155.3 151.6 160.4 150.5 C166.7 149.2 172.2 147.6 177.9 144.9 C180.8 143.6 183.7 143.1 186.8 142.6 C192.6 141.4 197.5 139.6 202.9 137.3 C207.6 135.4 212.5 134.2 217.4 133 C220.5 132.1 223.4 131.1 226.3 129.9 C231.9 127.8 237.5 127 243.3 126.1 C247.6 125.5 251.5 124.6 255.6 123.1 C262.5 120.6 269.7 119.4 276.9 117.9 C284.4 116.4 291.5 114.4 298.8 111.9 C302 111 304.6 110.8 308 111 C311.3 113.7 312.9 115.3 313.7 119.5 C313.8 120.9 313.8 122.3 313.8 123.8 C313.8 124.5 313.9 125.3 313.9 126.1 C313.9 128.7 314 131.4 314 134 C314 134.5 314 134.5 314 136.8 C314.1 144.2 314.2 151.6 314.2 159 C314.2 161.5 314.2 163.9 314.2 166.4 C314.2 173.1 314.2 179.7 314.2 186.4 C314.2 190.5 314.2 194.7 314.2 198.8 C314.2 210.4 314.2 222 314.2 233.6 C314.2 234.3 314.2 235 314.2 235.8 C314.2 236.5 314.2 237.3 314.2 238 C314.2 239.5 314.2 241 314.2 242.5 C314.2 243.3 314.2 244 314.2 244.8 C314.2 256.8 314.3 268.8 314.3 280.9 C314.3 293.3 314.3 305.7 314.3 318.1 C314.3 325 314.3 332 314.3 338.9 C314.4 345.4 314.4 352 314.4 358.5 C314.4 360.9 314.4 363.3 314.4 365.6 C314.5 400.6 314.5 400.6 308.1 408.1 C307.6 408.5 307.1 409 306.5 409.5 C304.8 411.2 303.8 412.9 302.6 415 C295.9 425.8 282.1 432.8 270 436 C267.2 436.2 264.5 436.3 261.8 436.2 C261 436.2 260.2 436.2 259.5 436.2 C246 435.9 233.8 431.8 224 422 C222.6 420 221.3 418 220 416 C219.2 415.1 218.4 414.2 217.6 413.2 C208.1 401.9 209.3 385 209.3 371.2 C209.3 369 209.3 366.8 209.2 364.5 C209.2 358.7 209.2 352.9 209.2 347.1 C209.2 341.3 209.1 335.6 209.1 329.8 C209 316.2 209 302.6 209 289 C209 288.4 209 288.4 209 285.4 C209 270.3 209 255.1 209 240 C207.4 239 205.7 238 204 237 C197.4 239 190.7 241.1 184.1 243.1 C180.8 244.2 177.5 245.2 174.1 246.2 C172.4 246.7 170.7 247.3 169 247.8 C139.6 256.9 139.6 256.9 131 258.4 C129 259 129 259 126.9 260.4 C122.8 262.7 118.4 263.7 113.9 264.9 C107.3 266.7 100.9 268.7 94.5 271.1 C91.5 272.2 88.5 272.8 85.4 273.4 C80.3 274.6 76.2 276.3 71.6 278.8 C68.7 280.1 66 281 62.9 281.9 C45.7 287 30.3 293.7 20.7 309.7 C18.5 313.9 17.9 317.3 17.7 322 C17.7 323 17.6 324 17.6 325.1 C17.5 326.2 17.5 327.2 17.5 328.4 C17.4 329.5 17.4 330.7 17.3 331.8 C17 340.5 16.9 349.2 16.8 357.9 C16.8 359.2 16.8 360.4 16.7 361.7 C16.7 366.8 16.6 371.9 16.6 377 C16.6 380.8 16.5 384.6 16.5 388.3 C16.5 389.5 16.5 390.6 16.5 391.8 C16.3 405.8 11.4 413.2 1.9 423.3 C-9.4 434.2 -22 436.5 -37 436.3 C-43 436.1 -47.7 434.7 -53 432 C-53.9 431.6 -54.8 431.2 -55.8 430.8 C-69.2 424.2 -79.1 412.1 -84.1 398.2 C-85.6 392.7 -85.6 387.2 -85.6 381.5 C-85.6 380.2 -85.6 378.9 -85.7 377.6 C-85.7 374.1 -85.7 370.5 -85.7 367 C-85.7 363.2 -85.8 359.4 -85.8 355.6 C-85.9 346.8 -86 338.1 -86 329.3 C-86 326.3 -86 323.3 -86 320.3 C-86.1 300.5 -86.2 280.7 -86.2 260.8 C-86.2 256.1 -86.2 251.3 -86.2 246.5 C-86.2 230.6 -86.2 214.8 -86.2 198.9 C-86.2 198 -86.2 197.2 -86.2 196.3 C-86.2 195.5 -86.2 194.6 -86.2 193.8 C-86.2 180 -86.2 166.2 -86.2 152.4 C-86.2 138.1 -86.2 123.8 -86.2 109.4 C-86.2 101.5 -86.2 93.5 -86.2 85.5 C-86.3 78.8 -86.3 72 -86.2 65.3 C-86.2 61.8 -86.2 58.4 -86.3 55 C-86.3 51.3 -86.3 47.5 -86.2 43.8 C-86.3 42.7 -86.3 41.7 -86.3 40.6 C-86.2 29.4 -83.9 21.5 -78 12 C-77.5 11.2 -77 10.5 -76.5 9.7 C-69.6 -0.3 -57.4 -8.7 -45.4 -11.2 C-28.1 -14.3 -13.7 -10.6 0 0 Z", 225, 105),
-    ("M0 0 C0.7 0.2 1.3 0.3 2 0.5 C6.6 1.7 9.9 3.5 13.7 6.2 C14.5 6.8 15.3 7.3 16.1 7.9 C21.1 11.7 25.5 15.9 29.6 20.8 C30 21.3 30.5 21.8 30.9 22.3 C41.2 35.1 39.2 54.3 39.1 69.6 C39.1 73.5 39.1 77.5 39.1 81.4 C39 83.9 39 86.4 39 89 C39 90.1 39 91.3 39 92.5 C39 93.6 39 94.7 39 95.8 C39 96.3 39 96.3 39 98.7 C38.7 101.4 38.2 103 36.7 105.2 C29.4 108.7 21.3 110.3 13.6 112.2 C12.9 112.4 12.1 112.5 11.4 112.7 C-2.6 116.2 -16.6 119 -30.8 121 C-31.3 121.1 -31.3 121.1 -33.6 121.4 C-35.2 121.7 -36.9 121.9 -38.6 122.1 C-42.5 122.7 -46 123.4 -49.6 124.8 C-53.7 126.4 -56.1 126.5 -60.3 126.2 C-63.5 123.5 -63.9 121.1 -64.2 116.9 C-64.4 111.9 -64.4 106.9 -64.3 101.9 C-64.2 92.7 -64.3 83.5 -64.7 74.3 C-64.7 72.4 -64.8 70.5 -64.9 68.6 C-65 65.8 -65.1 63 -65.2 60.2 C-65.8 46 -66 32.2 -57.3 20.2 C-57 19.9 -57 19.9 -55.7 17.9 C-52.1 13 -48.6 9.7 -43.4 6.5 C-41.3 5.2 -41.3 5.2 -39.6 3.7 C-36.2 1.5 -32.7 0.9 -28.8 0.1 C-27.9 -0.1 -27.1 -0.3 -26.3 -0.5 C-17 -2.3 -9.2 -2.2 0 0 Z", 500.3125, 93.75),
-]
-LOGO_MATRIX = "matrix(0.125 0 0 0.124888641 -16.95 -10.939755011)"  # maps into viewBox 0 0 51 57
 
+@dataclass
+class Scene:
+    kicker: str
+    seconds: float
+    draw: Draw
 
-def logo_polys():
-    polys = []
-    for d, tx, ty in LOGO_PATHS:
-        nums = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", d)]
-        x0, y0 = nums[0], nums[1]
-        pts = [(x0, y0)]
-        k = 2
-        while k + 5 < len(nums):
-            c1x, c1y, c2x, c2y, ex, ey = nums[k:k + 6]
-            for s in range(1, 7):
-                u = s / 6
-                a, b, c, e = (1 - u) ** 3, 3 * u * (1 - u) ** 2, 3 * u * u * (1 - u), u ** 3
-                pts.append((a * x0 + b * c1x + c * c2x + e * ex, a * y0 + b * c1y + c * c2y + e * ey))
-            x0, y0 = ex, ey
-            k += 6
-        polys.append([((x + tx) * 0.125 - 16.95, (y + ty) * 0.124888641 - 10.939755011) for x, y in pts])
-    return polys
 
+# The wordmark is built, not typeset: bars and arcs of one stroke on an x-height of 54 units, so it
+# is the same on every machine and the dot over the i sits exactly where the geometry says.
+S, XH, ASC = 13.0, 54.0, 80.0
+_C, _H = XH - S / 2, S / 2
 
-def inside(poly, x, y):
-    c = False
-    n = len(poly)
-    for i in range(n):
-        x1, y1 = poly[i]
-        x2, y2 = poly[(i + 1) % n]
-        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
-            c = not c
-    return c
 
-
-def logo_points(n, height):
-    """Blue-noise sample n points inside the H, scaled to `height` px, centred on (0, 0)."""
-    polys = logo_polys()
-    sc = height / 57.0
-    cand = []
-    while len(cand) < n * 14:
-        x, y = rng.uniform(0, 51), rng.uniform(0, 57)
-        if any(inside(p, x, y) for p in polys):
-            cand.append(((x - 25.5) * sc, (y - 28.5) * sc))
-    pts = [cand.pop()]
-    # Mitchell's best-candidate, using a coarse spatial hash for speed
-    pool = cand
-    while len(pts) < n:
-        best, bd = None, -1
-        for _ in range(12):
-            c = pool[rng.randrange(len(pool))]
-            d = min((c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 for p in pts)
-            if d > bd:
-                best, bd = c, d
-        pts.append(best)
-    return pts
-
-
-# ------------------------------------------------------------------------------- particles
-
-class P:
-    pass
-
-
-parts = []
-for i in range(N):
-    p = P()
-    p.i = i
-    p.amber = rng.random() < 0.12
-    p.grad = "gA" if p.amber else rng.choice(["gB", "gB", "gP", "gW", "gB"])
-    p.base = rng.uniform(0.75, 1.5) * (1.15 if p.amber else 1.0)
-    p.ph = rng.random()
-    p.ph2 = rng.random()
-    p.th = rng.uniform(0, 2 * math.pi)
-    p.jit = (rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1))
-    parts.append(p)
-
-LOGO_C = (600, 228)
-LOGO_H = 236
-LOGO_PTS = logo_points(N, LOGO_H)
-rng.shuffle(LOGO_PTS)
-for p, q in zip(parts, LOGO_PTS):
-    p.logo = q
-
-# tunnel star field ------------------------------------------------------------------------
-for p in parts:
-    p.R = rng.uniform(70, 760)
-    p.z0 = rng.uniform(0, 2400)
-
-
-def F_tunnel(p, t):
-    z = 50 + ((p.z0 - 950 * t) % 2400)
-    s = 520 / z
-    x = 600 + p.R * math.cos(p.th) * s
-    y = 300 + p.R * math.sin(p.th) * s * 0.86
-    a = smooth((2450 - z) / 500) * smooth((z - 55) / 140)
-    return x, y, p.base * clamp(s * 2.6, 0.5, 6), a
-
-
-def F_logo(p, t):
-    lx, ly = p.logo
-    lz = p.jit[2] * 14
-    yaw = -0.9 * (1 - ease((t - 2.4) / 2.6)) + 0.16 * math.sin((t - 3.6) * 0.8) * smooth((t - 4.4) / 1.5)
-    pitch = 0.10 * math.sin((t - 3.0) * 0.6)
-    x, y, s, z = cam((lx, ly, lz), yaw, pitch, *LOGO_C, dist=900, focal=900)
-    shimmer = 0.78 + 0.22 * math.sin(2 * math.pi * (p.ph + t * 0.45))
-    return x, y, p.base * 1.9 * s, shimmer
-
-
-# Humanize stack ---------------------------------------------------------------------------
-FLOW_C = (330, 330)
-PLANE_Y = [-120, -40, 40, 120]
-PLANE_HALF = 122
-FLOW_PITCH = 0.52
-
-
-def flow_yaw(t):
-    return 0.42 + 0.075 * (t - 7.0)
-
-
-COLS = [(x, z) for x in (-72, 0, 72) for z in (-72, 0, 72)]
-for p in parts:
-    r = rng.random()
-    p.role = "back" if p.amber else ("ring" if r < 0.24 else "stream")
-    cx_, cz_ = COLS[rng.randrange(9)]
-    p.col = (cx_ + rng.gauss(0, 12), cz_ + rng.gauss(0, 12))
-    p.spd = rng.uniform(0.16, 0.26)
-
-
-def F_flow(p, t):
-    yaw = flow_yaw(t)
-    if p.role == "stream":
-        u = (p.ph + p.spd * t) % 1.0
-        y = -160 + 320 * u
-        w = (p.col[0], y, p.col[1])
-        a = smooth(u / 0.08) * smooth((1 - u) / 0.08) * 0.95
-    elif p.role == "ring":
-        ang = p.th + 0.55 * t
-        rad = 192 + p.jit[0] * 12
-        w = (rad * math.cos(ang), 40 + p.jit[1] * 6 + 5 * math.sin(3 * ang), rad * math.sin(ang))
-        a = 0.85
-    else:  # FlowBench: the one arrow that runs the other way
-        u = (p.ph + 0.22 * t) % 1.0
-        ang = math.pi * u
-        w = (-175 - 70 * math.sin(ang) + p.jit[0] * 8, 135 - 270 * u, 30 + p.jit[1] * 10)
-        a = smooth(u / 0.1) * smooth((1 - u) / 0.1)
-    x, y, s, z = cam(w, yaw, FLOW_PITCH, *FLOW_C)
-    depth = clamp(0.55 + 0.45 * (-z / 260))
-    return x, y, p.base * 2.1 * s, a * (0.5 + 0.5 * depth)
-
-
-# HOA icosahedron ------------------------------------------------------------------------------
-ICO_C = (330, 300)
-ICO_R = 165
-_g = (1 + 5 ** 0.5) / 2
-_iv = [(-1, _g, 0), (1, _g, 0), (-1, -_g, 0), (1, -_g, 0), (0, -1, _g), (0, 1, _g), (0, -1, -_g),
-       (0, 1, -_g), (_g, 0, -1), (_g, 0, 1), (-_g, 0, -1), (-_g, 0, 1)]
-_n = math.sqrt(1 + _g * _g)
-ICO_V = [(x / _n * ICO_R, y / _n * ICO_R, z / _n * ICO_R) for x, y, z in _iv]
-ICO_E = sorted({tuple(sorted((a, b))) for a in range(12) for b in range(12)
-                if a < b and abs(math.dist(ICO_V[a], ICO_V[b]) - ICO_R * 2 / _n * 1.0) < 1e-6 * ICO_R + 1})
-ICO_E = [e for e in ICO_E if abs(math.dist(ICO_V[e[0]], ICO_V[e[1]]) - min(
-    math.dist(ICO_V[0], ICO_V[k]) for k in range(1, 12))) < 1]
-assert len(ICO_E) == 30, len(ICO_E)
-
-
-def ico_world(v, t):
-    v = rot_y(v, 0.42 * t)
-    v = rot_x(v, 0.38)
-    return rot_z(v, 0.18)
-
-
-def F_ico(p, t):
-    if p.amber:  # amber: electrons on a tilted orbit
-        ang = p.th + 1.1 * t
-        rad = 235 + p.jit[0] * 10
-        w = rot_x((rad * math.cos(ang), 0, rad * math.sin(ang)), 1.15 + p.jit[1] * 0.25)
-        w = rot_z(w, -0.35)
-        x, y, s, z = cam(w, 0, 0, *ICO_C)
-        return x, y, p.base * 2.0 * s, 0.6 + 0.4 * clamp(-z / 200 + 0.5)
-    e = ICO_E[p.i % 30]
-    k = p.i // 30
-    u = ((k + 0.5) / 13.4 + 0.07 * t * (1 if p.i % 2 else -1)) % 1.0
-    a0, b0 = ico_world(ICO_V[e[0]], t), ico_world(ICO_V[e[1]], t)
-    w = tuple(lerp(a0[j], b0[j], u) + p.jit[j] * 3 for j in range(3))
-    x, y, s, z = cam(w, 0, 0, *ICO_C)
-    a = (0.3 + 0.7 * clamp(0.5 - z / (2 * ICO_R))) * smooth(u / 0.07) * smooth((1 - u) / 0.07)
-    return x, y, p.base * 1.9 * s, a
-
-
-# KDA heat grid ---------------------------------------------------------------------------------
-KDA_C = (345, 360)
-KDA_PITCH = 0.56
-GRID = 6
-CELL = 50
-CUBE = 42
-
-
-def kda_yaw(t):
-    return 0.55 + 0.05 * (t - 23.0)
-
-
-def kda_height(i, j, t):
-    cx, cz = i - 2.5, j - 2.5
-    d = math.hypot(cx, cz)
-    hot = math.exp(-((cx - 0.8) ** 2 + (cz + 0.6) ** 2) / 3.0)
-    wave = 0.5 + 0.5 * math.sin(1.25 * d - 2.4 * t)
-    return 12 + 125 * (0.25 * wave + 0.75 * hot * (0.65 + 0.35 * wave))
-
-
-def F_kda(p, t):
-    yaw = kda_yaw(t)
-    if p.amber:  # sparks off the hottest tiles
-        u = (p.ph + 0.45 * t) % 1.0
-        x0 = (0.8 + p.jit[0] * 1.6) * CELL
-        z0 = (-0.6 + p.jit[1] * 1.6) * CELL
-        w = (x0 + p.jit[2] * 30 * u, -110 - 230 * u, z0)
-        x, y, s, z = cam(w, yaw, KDA_PITCH, *KDA_C)
-        return x, y, p.base * 2.2 * s, smooth(u / 0.1) * (1 - u)
-    ring = p.i % 3
-    rad = (205, 238, 270)[ring] + p.jit[0] * 7
-    hgt = (-55, -130, -205)[ring] + p.jit[1] * 6
-    spd = (0.75, -0.55, 0.4)[ring]
-    ang = p.th + spd * t
-    w = (rad * math.cos(ang), hgt + 10 * math.sin(2 * ang + ring), rad * math.sin(ang))
-    x, y, s, z = cam(w, yaw, KDA_PITCH, *KDA_C)
-    return x, y, p.base * 2.0 * s, 0.35 + 0.6 * clamp(0.5 - z / 500)
-
-
-# ProgramBench bars -------------------------------------------------------------------------------
-BAR_C = (330, 430)
-BAR_YAW, BAR_PITCH = 0.62, 0.36
-BARS = [(-150, 0.5), (0, 0.0), (150, 3.5)]   # x, percent
-BAR_SCALE = 62
-
-
-def bar_grow(t):
-    return ease((t - 31.6) / 2.0)
-
-
-def F_bars(p, t):
-    top_y = -3.5 * BAR_SCALE * bar_grow(t) - 4
-    if p.role != "ring":   # fountain from the 3.5% bar
-        period = 1.7
-        u = ((p.ph + t / period) % 1.0)
-        tt = u * period
-        ang = p.th
-        sp = 55 + 50 * p.ph2
-        v0 = 200 + 70 * p.jit[0]
-        w = (150 + math.cos(ang) * sp * tt, top_y - v0 * tt + 0.5 * 240 * tt * tt, math.sin(ang) * sp * tt)
-        x, y, s, z = cam(w, BAR_YAW, BAR_PITCH, *BAR_C)
-        a = smooth(u / 0.06) * (1 - u) ** 0.7
-        return x, y, p.base * 2.0 * s, a
-    ang = p.th + 0.35 * t
-    rad = 270 + p.jit[0] * 26
-    w = (rad * math.cos(ang), 2, rad * math.sin(ang) * 0.85)
-    x, y, s, z = cam(w, BAR_YAW, BAR_PITCH, *BAR_C)
-    return x, y, p.base * 1.8 * s, 0.25 + 0.5 * clamp(0.5 - z / 500)
-
-
-# Finale globe ----------------------------------------------------------------------------------
-GLOBE_C = (600, 250)
-GLOBE_R = 150
-for k, p in enumerate(parts):
-    yy = 1 - 2 * (k + 0.5) / N
-    rr = math.sqrt(1 - yy * yy)
-    th = math.pi * (3 - 5 ** 0.5) * k
-    p.sph = (rr * math.cos(th), yy, rr * math.sin(th))
-    p.ringk = k % 2
-
-
-def F_globe(p, t):
-    if p.role == "ring" or p.amber:
-        k = 0 if p.amber else 1
-        ang = p.th + (0.9 if k == 0 else -0.6) * t
-        rad = (232, 262)[k] + p.jit[0] * 5
-        w = (rad * math.cos(ang), p.jit[1] * 3, rad * math.sin(ang))
-        w = rot_x(w, (1.22, 1.32)[k])
-        w = rot_z(w, (-0.30, 0.34)[k])
-    else:
-        w = tuple(c * GLOBE_R for c in p.sph)
-        w = rot_y(w, 0.45 * t)
-        w = rot_x(w, 0.32)
-    x, y, s, z = cam(w, 0, 0, *GLOBE_C)
-    return x, y, p.base * 1.9 * s, 0.2 + 0.8 * clamp(0.5 - z / 320)
-
-
-def F_tunnel_end(p, t):
-    return F_tunnel(p, t - T)
-
-
-# timeline: (formation, hold_start, hold_end) -- transitions fill the gaps
-SEGS = [
-    (F_tunnel, 0.0, 2.1),
-    (F_logo, 3.5, 7.0),
-    (F_flow, 8.1, 15.2),
-    (F_ico, 16.2, 23.2),
-    (F_kda, 24.2, 31.1),
-    (F_bars, 32.0, 38.5),
-    (F_globe, 39.6, 46.0),
-    (F_tunnel_end, 47.4, T),
-]
-
-for p in parts:
-    p.trans = []
-    for k in range(len(SEGS) - 1):
-        gap0, gap1 = SEGS[k][2], SEGS[k + 1][1]
-        dur = (gap1 - gap0) * rng.uniform(0.55, 0.75)
-        st = gap0 + rng.random() * (gap1 - gap0 - dur)
-        p.trans.append((st, st + dur, rng.uniform(-1, 1), rng.uniform(0.6, 1.4)))
-
-
-def particle_state(p, t):
-    for k, (fn, a, b) in enumerate(SEGS):
-        if a <= t <= b:
-            return fn(p, t)
-        if k + 1 < len(SEGS) and b < t < SEGS[k + 1][1]:
-            st, en, swirl, boost = p.trans[k]
-            A = fn(p, t)
-            B = SEGS[k + 1][0](p, t)
-            u = ease((t - st) / (en - st))
-            dx, dy = B[0] - A[0], B[1] - A[1]
-            dist = math.hypot(dx, dy) + 1e-6
-            bump = math.sin(math.pi * u)
-            ox, oy = -dy / dist * swirl * 0.38 * dist * bump, dx / dist * swirl * 0.38 * dist * bump
-            x = lerp(A[0], B[0], u) + ox
-            y = lerp(A[1], B[1], u) + oy
-            r = lerp(A[2], B[2], u) * (1 + 0.7 * boost * bump)
-            al = lerp(A[3], B[3], u)
-            al = max(al, 0.75 * bump * max(A[3], B[3], 0.6))
-            return x, y, r, al
-    return SEGS[-1][0](p, t)
-
-
-def simplify(ts, chans, tol, vis):
-    """Douglas-Peucker on one channel group: chans is a list of value lists sharing times ts.
-    vis[k] False means the sample is invisible, so its position does not need to be exact."""
-    n = len(ts)
-    keep = [False] * n
-    keep[0] = keep[-1] = True
-    stack = [(0, n - 1)]
-    while stack:
-        i, j = stack.pop()
-        if j <= i + 1:
-            continue
-        worst, wk = 1.0, -1
-        span = ts[j] - ts[i]
-        for k in range(i + 1, j):
-            if not (vis[k] or vis[i] or vis[j]):
-                continue
-            u = (ts[k] - ts[i]) / span
-            e = max(abs(lerp(c[i], c[j], u) - c[k]) for c in chans) / tol
-            if e > worst:
-                worst, wk = e, k
-        if wk >= 0:
-            keep[wk] = True
-            stack.append((i, wk))
-            stack.append((wk, j))
-    return [k for k in range(n) if keep[k]]
-
-
-def keyed(attr, idx, ts, fmtv, kind=None):
-    keys = ";".join(kt(ts[k]) for k in idx)
-    vals = ";".join(fmtv(k) for k in idx)
-    if kind:
-        return (f'<animateTransform attributeName="transform" type="{kind}" dur="{f(T)}s" '
-                f'repeatCount="indefinite" keyTimes="{keys}" values="{vals}"/>')
-    return f'<animate attributeName="{attr}" dur="{f(T)}s" repeatCount="indefinite" keyTimes="{keys}" values="{vals}"/>'
-
-
-def particles_svg():
-    out = []
-    steps = int(T * FPS)
-    ts = [s / FPS for s in range(steps + 1)]
-    for p in parts:
-        X, Y, R, A = [], [], [], []
-        for t in ts:
-            x, y, r, a = particle_state(p, t)
-            X.append(clamp(x, -60, W + 60))
-            Y.append(clamp(y, -60, H + 60))
-            R.append(r)
-            A.append(clamp(a))
-        vis = [a > 0.03 and -20 < x < W + 20 and -20 < y < H + 20 for a, x, y in zip(A, X, Y)]
-        i_pos = simplify(ts, [X, Y], 1.1, vis)
-        i_r = simplify(ts, [R], 0.3, vis)
-        i_a = simplify(ts, [A], 0.07, [True] * len(ts))
-        out.append(
-            f'<circle r="{f(R[0])}" fill="url(#{p.grad})" opacity="{f(A[0], 2)}" '
-            f'transform="translate({X[0]:.0f} {Y[0]:.0f})">'
-            + keyed(None, i_pos, ts, lambda k: f"{X[k]:.0f} {Y[k]:.0f}", "translate")
-            + keyed("r", i_r, ts, lambda k: f(R[k]))
-            + keyed("opacity", i_a, ts, lambda k: f(A[k], 2))
-            + "</circle>")
-    return "\n".join(out)
-
-
-# --------------------------------------------------------------------- sampled shape animation
-
-def frames(t0, t1, fps):
-    n = max(2, int(round((t1 - t0) * fps)))
-    return [t0 + (t1 - t0) * k / n for k in range(n + 1)]
-
-
-def path_anim(ts, ds, t_in, t_out, fade=0.5, attrs="", extra_anims="", op_vals=None):
-    """A <path> whose d is keyed at times ts (within [t_in, t_out]) and visible only in between."""
-    pairs = [(0, ds[0])] + list(zip(ts, ds)) + [(T, ds[-1])]
-    keys = ";".join(kt(t) for t, _ in pairs)
-    vals = ";".join(d for _, d in pairs)
-    da = f'<animate attributeName="d" dur="{f(T)}s" repeatCount="indefinite" keyTimes="{keys}" values="{vals}"/>'
-    if op_vals is None:
-        oa = anim("opacity", window(t_in, t_out, fade))
-    else:
-        w = window(t_in, t_out, fade)
-        oa = anim("opacity", [(t, f(v * (op_vals[min(range(len(ts)), key=lambda k: abs(ts[k] - t))]), 2))
-                              for t, v in w])
-    return f'<path d="{ds[0]}" opacity="0" {attrs}>{da}{oa}{extra_anims}</path>'
-
-
-def poly_d(pts, close=True):
-    s = "M" + "L".join(f"{x:.0f} {y:.0f}" for x, y in pts)
-    return s + ("Z" if close else "")
-
-
-# ---------------------------------------------------------------------------- scene builders
-
-def scene_flow():
-    t_in, t_out = 7.4, 15.6
-    ts = frames(t_in - 0.2, t_out + 0.2, 8)
-    out = []
-    grid_d_all, fill_d_all = [[] for _ in PLANE_Y], [[] for _ in PLANE_Y]
-    for t in ts:
-        yaw = flow_yaw(t)
-        for k, py in enumerate(PLANE_Y):
-            h = PLANE_HALF
-            corners = [cam((x, py, z), yaw, FLOW_PITCH, *FLOW_C)[:2] for x, z in ((-h, -h), (h, -h), (h, h), (-h, h))]
-            fill_d_all[k].append(poly_d(corners))
-            g = []
-            for v in (-h / 2, 0, h / 2):
-                a = cam((v, py, -h), yaw, FLOW_PITCH, *FLOW_C)[:2]
-                b = cam((v, py, h), yaw, FLOW_PITCH, *FLOW_C)[:2]
-                c = cam((-h, py, v), yaw, FLOW_PITCH, *FLOW_C)[:2]
-                d = cam((h, py, v), yaw, FLOW_PITCH, *FLOW_C)[:2]
-                g.append(f"M{a[0]:.0f} {a[1]:.0f}L{b[0]:.0f} {b[1]:.0f}M{c[0]:.0f} {c[1]:.0f}L{d[0]:.0f} {d[1]:.0f}")
-            grid_d_all[k].append("".join(g))
-    names = ["FLOWS", "RUNTIME", "AGENTS", "APPLICATIONS"]
-    for k in reversed(range(len(PLANE_Y))):  # far (bottom) first
-        hl = k == 1
-        stroke = AMBER if hl else BLUE_LIGHT
-        out.append(path_anim(ts, fill_d_all[k], t_in + 0.15 * k, t_out - 0.1 * k,
-                             attrs=f'fill="url(#{"planeA" if hl else "planeB"})" stroke="{stroke}" '
-                                   f'stroke-opacity="{0.9 if hl else 0.55}" stroke-width="1.4"'))
-        out.append(path_anim(ts, grid_d_all[k], t_in + 0.15 * k, t_out - 0.1 * k,
-                             attrs=f'fill="none" stroke="{stroke}" stroke-opacity="0.22" stroke-width="1"'))
-    # agent names orbiting the AGENTS plane
-    agents = ["claude", "codex", "dsh", "agy", "grok", "kimi", "qwen", "pi", "opencode", "mimo"]
-    for n, name in enumerate(agents):
-        ang0 = 2 * math.pi * n / len(agents)
-        tts = frames(t_in, t_out, 10)
-        pairs_tr, pairs_op, pairs_sc = [], [], []
-        for t in tts:
-            ang = ang0 + 0.28 * (t - t_in)
-            w = (228 * math.cos(ang), 40, 228 * math.sin(ang))
-            x, y, s, z = cam(w, flow_yaw(t), FLOW_PITCH, *FLOW_C)
-            pairs_tr.append((t, f"{x:.0f} {y:.0f}"))
-            pairs_sc.append((t, f(s, 2)))
-            depth = clamp(0.5 - z / 600)
-            env = smooth((t - t_in - 0.6) / 0.8) * smooth((t_out - 0.3 - t) / 0.6)
-            pairs_op.append((t, f((0.25 + 0.75 * depth) * env, 2)))
-        out.append(f'<g opacity="0">{anim("opacity", pairs_op)}{anim_tf("translate", pairs_tr)}'
-                   f'{anim_tf("scale", pairs_sc, additive=True)}'
-                   f'<text class="agent" text-anchor="middle" y="4">{name}</text></g>')
-    # labels for each plane (plane centres project to a fixed y since the stack spins on its axis)
-    plane_y = [cam((0, py, 0), 0.6, FLOW_PITCH, *FLOW_C)[1] for py in PLANE_Y]
-    label_y = [198, 278, 358, 438]
-    rows = [
-        ("FLOWS", "RLAR · Flame Chase · Humanize 1 · Ralph Loop", "the method, as code — humanfia/flowverse"),
-        ("RUNTIME", "Humanize", "sessions · budgets · traces · worktrees · containers · ssh"),
-        ("AGENTS", "the CLIs you already log into", "claude · codex · dsh · agy · grok · kimi · qwen · pi · opencode · mimo"),
-        ("APPLICATIONS", "HOA · KDA · HKA", "where a flow is found out — someone else keeps the scoreboard"),
+def _glyphs() -> list[tuple[str, float]]:
+    def arch(x0: float, x1: float) -> str:  # n's shoulder, from the left stem over to the right
+        r = (x1 - x0) / 2
+        return f"M{n(x0)} {n(-_C + r)}A{n(r)} {n(r)} 0 0 1 {n(x1)} {n(-_C + r)}V0"
+    h0, h1 = _H, 40 - _H
+    ro = XH / 2 - _H
+    a = (f"M{n(XH / 2 - ro)} {n(-XH / 2)}A{n(ro)} {n(ro)} 0 1 1 {n(XH / 2 + ro)} {n(-XH / 2)}"
+         f"A{n(ro)} {n(ro)} 0 1 1 {n(XH / 2 - ro)} {n(-XH / 2)}M{n(XH / 2 + ro)} {n(-XH)}V0")
+    r = (h1 - h0) / 2
+    return [
+        (f"M{n(h0)} 0V{n(-ASC)}" + arch(h0, h1), 40),                                             # h
+        (f"M{n(h0)} {n(-XH)}V{n(-_H - r)}A{n(r)} {n(r)} 0 0 0 {n(h1)} {n(-_H - r)}M{n(h1)} {n(-XH)}V0", 40),  # u
+        (f"M{n(_H)} 0V{n(-XH)}" + arch(_H, 31) + arch(31, 62 - _H), 62),                          # m
+        (a, XH),                                                                                   # a
+        (f"M{n(h0)} 0V{n(-XH)}" + arch(h0, h1), 40),                                              # n
+        (f"M{n(_H)} 0V{n(-ASC + _H + 12)}A12 12 0 0 1 {n(_H + 12)} {n(-ASC + _H)}H{n(_H + 20)}"
+         f"M-3 {n(-_C)}H24", 26),                                                                  # f
+        (f"M{n(_H)} 0V{n(-XH)}", S),                                                               # dotless i
+        (a, XH),                                                                                   # a
     ]
-    for k, (tag, main, sub) in enumerate(rows):
-        y, py = label_y[k], plane_y[k]
-        col = AMBER if k == 1 else BLUE_LIGHT
-        body = (f'<path d="M560 {py:.0f}H600L640 {y - 4:.0f}H652" fill="none" stroke="{col}" stroke-opacity="0.6" stroke-dasharray="2 4"/>'
-                f'<circle cx="560" cy="{py:.0f}" r="3" fill="{col}"/>'
-                + text(664, y - 16, tag, "tag" if k == 1 else "tagb")
-                + text(664, y + 7, main, "lab")
-                + text(664, y + 27, sub, "labs"))
-        out.append(reveal(body, t_in + 0.5 + 0.25 * k, t_out, dx=24, dy=0))
-    out.append(reveal(text(664, 82, "02 — THE RUNTIME", "tag")
-                      + text(662, 128, "Humanize", "h1")
-                      + text(664, 152, "Agent Flow System — the flow around the agents", "sub"), t_in + 0.2, t_out))
-    # FlowBench arc label
-    out.append(reveal(f'<path d="M46 112 l6 -8 l6 8" fill="none" stroke="{AMBER}" stroke-width="1.6"/>'
-                      + text(66, 112, "FLOWBENCH", "tag")
-                      + text(46, 132, "measures · selects · ships it back", "labs"), t_in + 1.4, t_out, dy=-10))
-    # typed install line
-    cmd = "$ uv tool install hmz"
-    out.append(typed(664, 522, cmd, t_in + 2.4, t_out, "cmd", width=12.2 * len(cmd)))
-    return "\n".join(out)
 
 
-_CLIPS = 0
+def wordmark(x0: float, base: float, k: float) -> tuple[str, tuple[float, float, float], float]:
+    """The wordmark at scale k: its svg, the i's dot (cx, cy, r) and its width."""
+    paths, x, dot = [], 0.0, (0.0, 0.0, 0.0)
+    for i, (d, w) in enumerate(_glyphs()):
+        paths.append(f'<path transform="translate({n(x)} 0)" d="{d}"/>')
+        if i == 6:
+            dot = (x0 + (x + _H) * k, base - (XH + 10 + S * 0.62) * k, S * 0.62 * k)
+        x += w + 8
+    width_ = (x - 8) * k
+    return (f'<g transform="translate({n(x0)} {n(base)}) scale({n(k)})" class="glyph">{"".join(paths)}</g>',
+            dot, width_)
 
 
-def typed(x, y, s, t_in, t_out, cls, width):
-    global _CLIPS
-    _CLIPS += 1
-    cid = f"type{_CLIPS}"
-    dur = 0.045 * len(s)
-    clip = (f'<clipPath id="{cid}"><rect x="{x - 4}" y="{y - 22}" height="32" width="0">'
-            + anim("width", [(0, 0), (t_in, 0), (t_in + dur, width + 8), (T, width + 8)])
-            + "</rect></clipPath>")
-    caret = (f'<rect x="{x}" y="{y - 15}" width="9" height="19" fill="{AMBER}">'
-             + anim_tf("translate", [(0, "0 0"), (t_in, "0 0"), (t_in + dur, f"{width + 4:.0f} 0"), (T, f"{width + 4:.0f} 0")])
-             + anim("opacity", [(0, 0), (t_in, 0)] + [(t_in + dur + 0.25 * k, (k + 1) % 2) for k in range(0, int((t_out - t_in - dur) / 0.25))] + [(t_out, 0)], calc="discrete")
-             + "</rect>")
-    return (f'{clip}<g opacity="0">{anim("opacity", window(t_in, t_out, 0.3))}'
-            f'<g clip-path="url(#{cid})">{text(x, y, s, cls)}</g>{caret}</g>')
+def logo_svg(logo: Logo, x: float, y: float, h: float, cls: str = "inkf") -> tuple[str, float, tuple[float, float, float]]:
+    """The H (without its dot) at height h, its width, and where its dot sits."""
+    vx, vy, vw, vh = logo.viewbox
+    s = h / vh
+    w = vw * s
+    slot = ((x + (logo.dot[0] - vx) * s, y + (logo.dot[1] - vy) * s, logo.dot[2] * s) if logo.dot
+            else (x + w * 0.9, y - h * 0.12, h * 0.1))
+    return (f'<svg x="{n(x)}" y="{n(y)}" width="{n(w)}" height="{n(h)}" viewBox="{" ".join(n(v) for v in logo.viewbox)}" '
+            f'overflow="visible" class="{cls}">{logo.body}</svg>', w, slot)
 
 
-def counter(x, y, finals, t0, t_out, cls, anchor="start", dur=1.1):
-    """Roll through `finals` (list of strings, last is the real value) between t0 and t0+dur."""
-    n = len(finals)
-    dt = dur / n
+Frame = tuple[float, float, float, float]  # t, x, y, r
+
+
+def hop(t0: float, a: tuple[float, float, float], b: tuple[float, float, float], d: float = 1.0) -> list[Frame]:
+    """A ballistic hop from a to b starting at t0."""
+    peak = min(a[1], b[1]) - 70
+    ctrl = 2 * peak - (a[1] + b[1]) / 2
     out = []
-    for k, s in enumerate(finals):
-        a = t0 + k * dt
-        b = t0 + (k + 1) * dt
-        if k == 0:
-            pairs = [(0, 1), (b, 0)]
-        elif k == n - 1:
-            pairs = [(0, 0), (a, 1)]
-        else:
-            pairs = [(0, 0), (a, 1), (b, 0)]
-        op = anim("opacity", pairs, calc="discrete")
-        out.append(f'<g opacity="{1 if k == 0 else 0}">{op}{text(x, y, s, cls, anchor)}</g>')
+    for i in range(9):
+        u = i / 8
+        e = u * u * (3 - 2 * u)
+        x = a[0] + (b[0] - a[0]) * e
+        y = (1 - e) ** 2 * a[1] + 2 * (1 - e) * e * ctrl + e * e * b[1]
+        out.append((t0 + d * u, x, y, a[2] + (b[2] - a[2]) * e))
+    return out
+
+
+def land(t: float, at: tuple[float, float, float]) -> list[Frame]:
+    """A squash on landing, mechanical rather than rubbery."""
+    x, y, r = at
+    return [(t + 0.1, x, y + r * 0.1, r * 0.9), (t + 0.25, x, y, r)]
+
+
+def dot_track(frames: list[Frame], cls: str = "red") -> str:
+    frames = sorted(frames)
+    t, x, y, r = frames[0]
+    return (f'<circle class="{cls}" cx="{n(x)}" cy="{n(y)}" r="{n(r)}">'
+            + anim("cx", [(t, x) for t, x, _, _ in frames]) + anim("cy", [(t, y) for t, _, y, _ in frames])
+            + anim("r", [(t, r) for t, _, _, r in frames]) + "</circle>")
+
+
+def ch_mark(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        lx, ly, lh = 92, 130, 290
+        mark, lw, slot = logo_svg(f.logo, lx, ly, lh)
+        # The H arrives as three planes cut from the one mark: the left stem drops from above, the
+        # middle slides in along the diagonal, the right stem rises from below.
+        moves = [(0, -560), (-640, 640 * SLOPE), (0, 560)]
+        cuts, parts = [], []
+        for i, (dx, dy) in enumerate(moves):
+            x0 = lx - 300 if i == 0 else lx + lw * i / 3
+            x1 = lx + lw + 300 if i == 2 else lx + lw * (i + 1) / 3 + 0.5
+            cuts.append(f'<clipPath id="cut{i}"><rect x="{n(x0)}" y="-600" width="{n(x1 - x0)}" height="1800"/></clipPath>')
+            parts.append(f'<g clip-path="url(#cut{i})">{g(mark, enter(t0 + 0.3 + 0.35 * i, dx, dy, 0.6))}</g>')
+        # Once the planes have locked, the whole mark takes their place, so no seam shows where they met.
+        locked = t0 + 1.7
+        parts = [g("".join(parts), anim("opacity", [(0, 1), (locked, 0)], discrete=True)),
+                 g(mark, anim("opacity", [(0, 0), (locked, 1)], discrete=True))]
+        letters, idot, _ = wordmark(450, 330, 1.25)
+        word = g(letters, enter(t0 + 2.0, 0, 160, 0.45), appear(t0 + 2.0, 0.1))
+        # The red circle rolls down the diagonal from the right edge and drops into the H's slot,
+        # hops over to dot the i, and comes home.
+        home = slot
+        sx, sy, sr = home
+        frames: list[Frame] = [(t0, W + 80, sy - 260, sr), (t0 + 1.3, W + 80, sy - 260, sr),
+                               (t0 + 2.2, sx + 60, sy - 40, sr), (t0 + 2.45, sx, sy, sr)]
+        frames += land(t0 + 2.45, home) + hop(t0 + 4.0, home, idot) + land(t0 + 5.0, idot)
+        frames += hop(t0 + 8.0, idot, home) + land(t0 + 9.0, home) + [(t1 + 1, sx, sy, sr)]
+        lead = (f.kicker or "").upper()
+        tag = g(slab(450, 410, lead, 22, "rev", "red"), enter(t0 + 3.0, -W - 400, 0)) if lead else ""
+        ground = (g(f'<polygon points="{W},0 {W},{n(H * 0.62)} {n(W - 360)},0" class="red"/>', enter(t0 + 0.1, 420, -420 * SLOPE))
+                  + g(f'<rect x="-40" y="{H - 88}" width="{W + 80}" height="18" class="inkf" '
+                      f'transform="rotate({n(-ANGLE / 3)} {W / 2} {H - 80})"/>', enter(t0 + 0.5, -W - 80, 0)))
+        return f"<defs>{''.join(cuts)}</defs>{ground}{''.join(parts)}{word}{tag}{dot_track(frames)}"
+    return draw
+
+
+def ch_thesis(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        # After Lissitzky: a red wedge driving into a circle. The circle is the model; the wedge is
+        # the flow built around it.
+        cx, cy, r = 230, 470, 200
+        circle = g(f'<circle cx="{cx}" cy="{cy}" r="{r}" class="inkf"/>' + text(cx - 60, cy + 6, "MODEL", "bk30r"),
+                   enter(t0 + 0.2, -520, 0))
+        wedge = g(f'<polygon points="{W + 20},{cy - 150} {W + 20},{cy + 40} {cx + 60},{cy - 20}" class="red"/>'
+                  + text(W - 210, cy - 22, "FLOW", "bk40p"), enter(t0 + 1.0, 820, 0, 0.6))
+        lines = wrap(f.headline.upper(), 40, 540, 3, True)
+        head = "".join(g(text(420, 104 + i * 50, ln, "bk40"), enter(t0 + 0.5 + 0.2 * i, 700, 0))
+                       for i, ln in enumerate(lines))
+        rule = f'<rect x="420" y="{104 + len(lines) * 50 - 28}" height="10" class="red">{extend("width", t0 + 1.3, 240)}</rect>'
+        # Then the argument, a sentence at a time.
+        said = f.manifesto[:2] + ([f.bet.split(" — ")[0].rstrip(",;") + "."] if f.bet else [])
+        step = (t1 - t0 - 4.0) / max(len(said), 1)
+        talk = []
+        for i, s in enumerate(said):
+            a, b = t0 + 3.6 + i * step, t0 + 3.6 + (i + 1) * step
+            body = "".join(text(440, 276 + j * 27, ln, "b20") for j, ln in enumerate(wrap(s, 20, 520, 4, True)))
+            talk.append(g(body, anim("opacity", [(0, 0), (a, 0), (a + 0.15, 1), (b - 0.15, 1), (b, 0)]),
+                          move([(0, 0, 24), (a, 0, 24), (a + 0.3, 0, 0)])))
+        bar = f'<rect x="420" y="254" width="8" height="84" class="red">{appear(t0 + 3.6)}</rect>' if said else ""
+        return circle + wedge + head + rule + bar + "".join(talk)
+    return draw
+
+
+def chips(x: float, y: float, items: list[tuple[str, str]], room: float, t: float, hot: Callable[[str], bool]) -> str:
+    out, cx = [], x
+    for i, (name, note) in enumerate(items):
+        label = name + (f" · {note}" if note else "")
+        w = width(label, 15, True) + 18
+        if cx + w > x + room:
+            out.append(g(text(cx + 4, y + 21, f"+{len(items) - i}", "c15"), appear(t + 0.05 * i)))
+            break
+        lit = hot(name)
+        out.append(g(f'<rect x="{n(cx)}" y="{n(y)}" width="{n(w)}" height="30" class="{"red" if lit else "chip"}"/>'
+                     + text(cx + 9, y + 21, label, "c15r" if lit else "c15"),
+                     enter(t + 0.05 * i, 0, -24, 0.25), appear(t + 0.05 * i, 0.1)))
+        cx += w + 6
     return "".join(out)
 
 
-def roll(final, steps=9, fmt="{:.0f}", start=0.0, prefix="", suffix=""):
-    vals = [start + (final - start) * ease(k / (steps - 1)) for k in range(steps)]
-    return [prefix + fmt.format(v) + suffix for v in vals[:-1]] + [prefix + fmt.format(final) + suffix]
+def native(name: str) -> bool:
+    """The runtime's direct model call (litellm), set apart from the coding-agent CLIs."""
+    return name.lower().startswith("litellm")
 
 
-def card(x, y, w, h, nums, cap1, cap2, t_in, t_out, num_dx=24, cap_x=None, big=True, accent=BLUE_LIGHT):
-    cap_x = cap_x if cap_x is not None else x + num_dx
-    body = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12" fill="url(#glass)" stroke="{accent}" stroke-opacity="0.28"/>'
-            f'<rect x="{x}" y="{y + 16}" width="3" height="{h - 32}" rx="1.5" fill="{accent}"/>')
-    if big:  # number on the left, captions on the right
-        body += counter(x + num_dx, y + h / 2 + 16, nums, t_in + 0.4, t_out, "num")
-        body += text(cap_x, y + h / 2 - 4, cap1, "lab") + text(cap_x, y + h / 2 + 18, cap2, "labs")
-    else:
-        body += counter(x + num_dx, y + 54, nums, t_in + 0.4, t_out, "nums")
-        body += text(x + num_dx, y + 80, cap1, "lab2") + text(x + num_dx, y + 99, cap2, "labs")
-    return reveal(body, t_in, t_out, dx=30, dy=0)
+def ch_stack(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        # A vertical red slab carries the runtime's name; the docs' bands stack beside it.
+        side = g(f'<rect x="{W - 110}" y="-10" width="84" height="{H + 20}" class="red"/>'
+                 + text(W - 50, H - 36, "HUMANIZE", "bk48p", f' transform="rotate(-90 {W - 50} {H - 36})"'),
+                 enter(t0 + 0.1, 0, -H - 20))
+        rows, y = [], 64
+        for i, band in enumerate(f.bands[:4]):
+            ti = t0 + 0.5 + 0.7 * i
+            title = band.title.upper()
+            tw = width(title, 22, True)
+            rows.append(g(f'<rect x="48" y="{y}" width="10" height="80" class="inkf"/>'
+                          + text(74, y + 24, title, "bk22")
+                          + text(88 + tw, y + 23, fit(band.about, 15, 770 - tw - 30), "m15")
+                          + chips(74, y + 42, band.chips, 770, ti + 0.3, native),
+                          enter(ti, -W, 0)))
+            if band.down and i < min(len(f.bands), 4) - 1:
+                rows.append(g(f'<polygon points="78,{y + 92} 98,{y + 92} 88,{y + 108}" class="red"/>'
+                              + text(110, y + 106, fit(band.down, 15, 740), "i15"), appear(ti + 0.6)))
+            y += 124
+        hot = next(((c, note) for b in f.bands for c, note in b.chips if native(c)), None)
+        note = g(slab(470, H - 22, f"{hot[0]}: {hot[1]}" if hot[1] else hot[0], 17, "rev17", "red", angle=ANGLE / 3),
+                 enter(t0 + 4.5, 520, 0)) if hot else ""
+        return side + "".join(rows) + note
+    return draw
 
 
-def scene_hoa():
-    t_in, t_out = 15.7, 23.6
-    out = []
-    ts = frames(t_in - 0.2, t_out + 0.2, 10)
-    for e in ICO_E:
-        ds, ops = [], []
-        for t in ts:
-            a = cam(ico_world(ICO_V[e[0]], t), 0, 0, *ICO_C)
-            b = cam(ico_world(ICO_V[e[1]], t), 0, 0, *ICO_C)
-            ds.append(f"M{a[0]:.0f} {a[1]:.0f}L{b[0]:.0f} {b[1]:.0f}")
-            ops.append(0.12 + 0.5 * clamp(0.5 - (a[3] + b[3]) / (4 * ICO_R)))
-        pairs = [(t, f(o, 2)) for t, o in zip(ts, ops)]
-        env = window(t_in + 0.4, t_out - 0.2, 0.6)
-        op_pairs = [(t, f(float(o) * (1 if t_in + 1.0 < t < t_out - 0.8 else 0), 2)) for t, o in pairs]
-        op_pairs = [(0, 0), (t_in + 0.4, 0)] + [p for p in op_pairs if t_in + 1.0 <= p[0] <= t_out - 0.8] + [(t_out - 0.2, 0)]
-        keys_d = [(0, ds[0])] + list(zip(ts, ds)) + [(T, ds[-1])]
-        out.append(f'<path d="{ds[0]}" stroke="{BLUE_PALE}" stroke-width="1.1" fill="none" opacity="0">'
-                   f'<animate attributeName="d" dur="{f(T)}s" repeatCount="indefinite" '
-                   f'keyTimes="{";".join(kt(t) for t, _ in keys_d)}" values="{";".join(d for _, d in keys_d)}"/>'
-                   f'{anim("opacity", op_pairs)}</path>')
-    # vertices
-    for v in ICO_V:
-        tts = frames(t_in + 0.4, t_out - 0.2, 10)
-        tr, op = [], []
-        for t in tts:
-            x, y, s, z = cam(ico_world(v, t), 0, 0, *ICO_C)
-            tr.append((t, f"{x:.0f} {y:.0f}"))
-            env = smooth((t - t_in - 1.0) / 0.6) * smooth((t_out - 0.4 - t) / 0.5)
-            op.append((t, f((0.35 + 0.65 * clamp(0.5 - z / (2 * ICO_R))) * env, 2)))
-        out.append(f'<circle r="7" fill="url(#gA)" opacity="0">{anim_tf("translate", tr)}{anim("opacity", op)}</circle>')
-    # orbiting Lean / maths glyphs
-    glyphs = ["∀", "∃", "⊢", "λ", "∑", "∫", "π", "ℝ", "≤", "→", "ℕ", "∂"]
-    for n, gch in enumerate(glyphs):
-        tts = frames(t_in, t_out, 8)
-        tr, sc, op = [], [], []
-        incl = 0.5 + 0.9 * (n % 3) / 2
-        for t in tts:
-            ang = 2 * math.pi * n / len(glyphs) + 0.32 * (t - t_in)
-            w = rot_x((245 * math.cos(ang), 0, 245 * math.sin(ang)), incl)
-            x, y, s, z = cam(w, 0, 0, *ICO_C)
-            tr.append((t, f"{x:.0f} {y:.0f}"))
-            sc.append((t, f(s, 2)))
-            env = smooth((t - t_in - 0.7) / 0.8) * smooth((t_out - 0.3 - t) / 0.6)
-            op.append((t, f((0.15 + 0.7 * clamp(0.5 - z / 500)) * env, 2)))
-        out.append(f'<g opacity="0">{anim("opacity", op)}{anim_tf("translate", tr)}{anim_tf("scale", sc, True)}'
-                   f'<text class="glyph" text-anchor="middle" y="8">{esc(gch)}</text></g>')
-    out.append(reveal(text(640, 82, "03 — HOA · HUMANIZE OLYMPIC AGENTS", "tag")
-                      + text(638, 128, "Lean accepts it, or it does not.", "h2")
-                      + text(640, 154, "Fully agentic mathematics, machine-checked end to end.", "sub"), t_in + 0.2, t_out))
-    cy0 = 188
-    out.append(card(640, cy0, 520, 92, roll(6, 7, prefix="", suffix="/6"), "IMO 2026 · all six problems",
-                    "Lean 4 checked · 3.2× faster · two backends", t_in + 0.6, t_out, cap_x=880))
-    out.append(card(640, cy0 + 106, 520, 92, ["#9", "#7", "#5", "#4", "#3", "#2", "#1"], "Lean-Eval leaderboard · first place",
-                    "172 research-level proofs, re-verified", t_in + 0.9, t_out, cap_x=880, accent=AMBER))
-    out.append(card(640, cy0 + 212, 520, 92, roll(670, 9, suffix="/672"), "PutnamBench",
-                    "plus physics & quantum, formalized", t_in + 1.2, t_out, cap_x=880))
-    out.append(reveal(text(60, 540, "theorem imo_2026_p6 … := by", "code")
-                      + text(330, 540, "✓ 0 sorry", "codeok"), t_in + 2.4, t_out))
-    return "\n".join(out)
+def ch_turn(f: Facts) -> Draw:
+    turn = next((b.down for b in f.bands if b.down.lower().startswith("a turn")), "")
+
+    def draw(t0: float, t1: float) -> str:
+        out = []
+        if turn:
+            head, _, rest = turn.partition(":")
+            parts = [p.strip() for p in re.split(r",\s*|\s+and\s+", rest) if p.strip()]
+            out.append(g(text(64, 112, head.strip().upper(), "bk48"), enter(t0 + 0.2, -420, 0)))
+            x = 64
+            for i, p in enumerate(parts):
+                w = width(p, 19, True) + 28
+                ti = t0 + 0.8 + 0.35 * i
+                out.append(g(f'<rect x="{n(x)}" y="136" width="{n(w)}" height="44" class="{"red" if i == 0 else "inkf"}"/>'
+                             + text(x + 14, 165, p, "rev19"), enter(ti, 0, -220)))
+                if i < len(parts) - 1:
+                    out.append(g(text(x + w + 6, 168, "+", "bk22"), appear(ti + 0.3)))
+                x += w + 28
+        # The runtime's features, each with a working diagram: a budget meter, one clock, the places.
+        feats = f.features[:3]
+        cw = (W - 128 - 32 * (len(feats) - 1)) / max(len(feats), 1)
+        env = next((b.chips for b in f.bands if b.title.lower().startswith("environment")), [])
+        for i, (h3, p) in enumerate(feats):
+            x = 64 + i * (cw + 32)
+            ti = t0 + 2.4 + 0.5 * i
+            body = [f'<rect x="{n(x)}" y="226" width="{n(cw)}" height="6" class="inkf"/>',
+                    *[text(x, 258 + 22 * j, ln, "bk17") for j, ln in enumerate(wrap(h3.upper(), 17, cw, 2, True))]]
+            body += [text(x, 306 + 22 * j, ln, "m15") for j, ln in enumerate(wrap(p, 15, cw, 3))]
+            dy, key = 392, (h3 + " " + p).lower()
+            if "budget" in key:     # a meter filling to its stop line, and the run stopping there
+                stop = x + cw * 0.84
+                body += [f'<rect x="{n(x)}" y="{dy}" width="{n(cw)}" height="34" class="chip"/>',
+                         f'<rect x="{n(x)}" y="{dy}" height="34" class="inkf">{anim("width", [(0, 0), (ti + 0.6, 0), (ti + 5.6, stop - x)])}</rect>',
+                         f'<rect x="{n(stop)}" y="{dy - 12}" width="6" height="58" class="red"/>',
+                         g(slab(stop - 84, dy + 80, "STOP", 19, "rev19", "red"), appear(ti + 5.6, 0.05))]
+            elif "trace" in key or "clock" in key:   # lanes of turns on one timeline, a cursor sweeping it
+                for j, (a, w_, cls) in enumerate([(0.0, 0.3, "inkf"), (0.32, 0.22, "red"), (0.56, 0.4, "inkf"),
+                                                  (0.08, 0.18, "red"), (0.4, 0.25, "inkf"), (0.7, 0.26, "red")]):
+                    body.append(f'<rect x="{n(x + a * cw)}" y="{dy + (j % 3) * 22}" height="16" class="{cls}">'
+                                f'{extend("width", ti + 0.5 + a * 4, w_ * cw, 0.8)}</rect>')
+                body.append(f'<rect y="{dy - 10}" width="3" height="84" class="inkf" x="{n(x)}">'
+                            f'{anim("x", [(0, x), (ti + 0.5, x), (ti + 5.3, x + cw)])}</rect>')
+            elif env:               # the places the work can land
+                for j, (name, _) in enumerate(env[:4]):
+                    body.append(g(f'<rect x="{n(x)}" y="{dy + j * 24}" width="12" height="16" class="red"/>'
+                                  + text(x + 22, dy + j * 24 + 14, fit(name, 15, cw - 22), "c15"),
+                                  enter(ti + 0.6 + 0.3 * j, 80, 0, 0.35)))
+            out.append(g("".join(body), enter(ti, 0, 90), appear(ti, 0.15)))
+        return "".join(out)
+    return draw
 
 
-def box_faces(x0, z0, sx, sz, h, yaw, pitch, C, y0=0.0):
-    """Visible faces (top, +x, -z) of an axis-aligned box standing on y=y0 (y is down)."""
-    def P(x, y, z):
-        return cam((x, y, z), yaw, pitch, *C)[:2]
-    x1, z1 = x0 + sx, z0 + sz
-    yt = y0 - h
-    top = [P(x0, yt, z0), P(x1, yt, z0), P(x1, yt, z1), P(x0, yt, z1)]
-    right = [P(x1, yt, z0), P(x1, yt, z1), P(x1, y0, z1), P(x1, y0, z0)]
-    front = [P(x0, yt, z0), P(x1, yt, z0), P(x1, y0, z0), P(x0, y0, z0)]
-    return top, right, front
+def ch_flows(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        total = sum(len(ns) for _, ns in f.flows)
+        big = g(text(40, 250, str(total), "huge") + text(50, 300, "FLOWS", "bk40"), enter(t0 + 0.2, 0, -320))
+        wedge = g(f'<polygon points="0,{H} 380,{H} 0,{n(H - 380 * SLOPE * 1.5)}" class="red"/>', enter(t0 + 0.1, -420, 0))
+        rows, y = [], 64
+        gap = min(64, (H - 100) / max(len(f.flows), 1))
+        for i, (title, names) in enumerate(f.flows):
+            ti = t0 + 0.6 + 0.3 * i
+            rows.append(g(f'<rect x="300" y="{n(y)}" width="236" height="32" class="inkf"/>'
+                          + text(310, y + 22, fit((title or "Flows").upper(), 14, 220, True), "rev14"),
+                          enter(ti, -320, 0, 0.4)))
+            rows.append(chips(546, y + 1, [(nm, "") for nm in names], W - 572, ti + 0.3, lambda s: False))
+            y += gap
+        return wedge + big + "".join(rows)
+    return draw
 
 
-def mix(c1, c2, u):
-    a = [int(c1[k:k + 2], 16) for k in (1, 3, 5)]
-    b = [int(c2[k:k + 2], 16) for k in (1, 3, 5)]
-    return "#" + "".join(f"{round(lerp(x, y, u)):02x}" for x, y in zip(a, b))
+def ch_loop(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        lp = f.loop
+        assert lp is not None
+        (a, a_does), (b, b_does) = lp.roles
+        out = [g(slab(64, 106, lp.name.upper(), 40, "bk40p", "red"), enter(t0 + 0.1, -520, 0)),
+               g("".join(text(64, 160 + 27 * j, ln, "b20") for j, ln in enumerate(wrap(lp.says, 20, 870, 2, True))),
+                 appear(t0 + 0.6))]
+        # Two blocks on the diagonal; the red circle carries the work up to the checker and the
+        # verdict back down, round after round, until the checker says done.
+        ax, ay = 120, 420
+        bx, by = 600, ay - 480 * SLOPE
+        bw = min(300, max(220, width(max(a, b, key=len).upper(), 30, True) + 32))
+        for x, y, role, does in ((ax, ay, a, a_does), (bx, by, b, b_does)):
+            out.append(g(f'<rect x="{x}" y="{n(y)}" width="{n(bw)}" height="80" class="inkf"/>'
+                         + text(x + 16, y + 50, fit(role.upper(), 30, bw - 26, True), "bk30r")
+                         + "".join(text(x, y + 104 + 20 * j, ln, "m15") for j, ln in enumerate(wrap(does, 15, 300, 2))),
+                         enter(t0 + 0.4, 0, 320, 0.5)))
+        out.append(f'<line x1="{n(ax + bw)}" y1="{n(ay + 40)}" x2="{bx}" y2="{n(by + 40)}" class="wire">{appear(t0 + 1.0)}</line>')
+        rounds = 3
+        span = (t1 - t0 - 2.6) / rounds
+        p, q = (ax + 196, ay - 26), (bx + 110, by - 26)
+        frames: list[Frame] = [(t0, *p, 0.01), (t0 + 1.2, *p, 0.01), (t0 + 1.4, *p, 18)]
+        marks = []
+        for rnd in range(rounds):
+            s = t0 + 1.6 + rnd * span
+            frames += [(s, *p, 18), (s + span * 0.35, *q, 18), (s + span * 0.55, *q, 18), (s + span * 0.9, *p, 18)]
+            last = rnd == rounds - 1
+            shown = [(0, 0), (s + span * 0.45, 0), (s + span * 0.5, 1)] + ([] if last else [(s + span, 1), (s + span + 0.01, 0)])
+            marks.append(g(slab(bx + bw + 20, by + 52, "DONE" if last else "NOT YET", 22, "rev", "red" if last else "inkf"),
+                           anim("opacity", shown, discrete=True)))
+            here = [(0, 0), (s, 0), (s + 0.01, 1)] + ([] if last else [(s + span, 1), (s + span + 0.01, 0)])
+            marks.append(g(text(ax, ay - 24, f"ROUND {rnd + 1}", "bk22"), anim("opacity", here, discrete=True)))
+        frames.append((t1 + 0.5, *p, 18))
+        return "".join(out) + "".join(marks) + dot_track(frames)
+    return draw
 
 
-def shade(c, k):
-    a = [int(c[j:j + 2], 16) for j in (1, 3, 5)]
-    return "#" + "".join(f"{clamp(round(v * k), 0, 255):02x}" for v in a)
+def ch_projects(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        rows = []
+        ps = f.projects[:6]
+        gap = min(70, (H - 160) / max(len(ps), 1))
+        for i, p in enumerate(ps):
+            y = 66 + i * gap
+            ti = t0 + 0.4 + 0.35 * i
+            sw = width(p.stat, 30, True) + 24 if p.stat else 0
+            row = text(64, y + 30, fit(p.name.upper(), 24, 290, True), "bk24") + text(64, y + 52, fit(p.sub, 15, 290), "m15")
+            if p.stat:
+                row += (f'<rect x="372" y="{n(y + 2)}" height="46" class="red">{extend("width", ti + 0.3, sw, 0.45)}</rect>'
+                        + g(text(384, y + 38, p.stat, "bk30r"), appear(ti + 0.65)))
+            says = p.stat_says or p.lede
+            row += g("".join(text(372 + (sw + 16 if sw else 0), y + 20 + 20 * j, ln, "m15") for j, ln in enumerate(wrap(says, 15, W - 430 - sw, 2))),
+                     appear(ti + 0.75))
+            rows.append(g(row, enter(ti, -W, 0)))
+        # What came back, as a ticker on an ink band across the foot.
+        ticker = ""
+        if f.results:
+            s = "   ■   ".join(f"{lab.upper()}  {num}" for lab, num in f.results) + "   ■   "
+            run = width(s, 17, True)
+            ticker = (f'<g transform="rotate({n(-ANGLE / 5)} {W / 2} {H - 46})"><rect x="-60" y="{H - 72}" width="{W + 120}" height="42" class="inkf"/>'
+                      f'<g>{move([(0, 0, 0), (t0, 0, 0), (t1, -min(run, 70 * (t1 - t0)), 0)])}'
+                      + text(0, H - 45, s, "rev17") + text(run, H - 45, s, "rev17") + "</g></g>")
+        return "".join(rows) + ticker
+    return draw
 
 
-def scene_kda():
-    t_in, t_out = 23.7, 31.6
-    out = []
-    ts = frames(t_in - 0.2, t_out + 0.2, 6)
-    cells = [(i, j) for i in range(GRID) for j in range(GRID)]
-    cells.sort(key=lambda c: (c[0] - 2.5) - (c[1] - 2.5) * -1)  # far (small x, large z) first
-    cells.sort(key=lambda c: c[0] - c[1])
-    for (i, j) in cells:
-        x0 = (i - GRID / 2) * CELL + (CELL - CUBE) / 2
-        z0 = (j - GRID / 2) * CELL + (CELL - CUBE) / 2
-        cx_, cz_ = i - 2.5, j - 2.5
-        heat = math.exp(-((cx_ - 0.8) ** 2 + (cz_ + 0.6) ** 2) / 3.0)
-        hv = clamp(heat * 1.15)
-        base = mix(BLUE, BLUE_MID, hv / 0.45) if hv < 0.45 else mix("#c9782a", AMBER, (hv - 0.45) / 0.55)
-        faces = [[], [], []]
-        for t in ts:
-            hgt = kda_height(i, j, t)
-            fs = box_faces(x0, z0, CUBE, CUBE, hgt, kda_yaw(t), KDA_PITCH, KDA_C)
-            for k in range(3):
-                faces[k].append(poly_d(fs[k]))
-        delay = 0.03 * (i + j)
-        cols = [mix(base, "#ffffff", 0.22), shade(base, 0.72), shade(base, 0.5)]
-        for k in range(3):
-            out.append(path_anim(ts, faces[k], t_in + 0.2 + delay, t_out - 0.1 - delay * 0.5,
-                                 attrs=f'fill="{cols[k]}" stroke="{mix(base, "#ffffff", 0.5)}" '
-                                       f'stroke-opacity="{0.55 if k == 0 else 0.18}" stroke-width="0.8"'))
-    # chip outline under the grid
-    ds = []
-    for t in ts:
-        hs = GRID * CELL / 2 + 22
-        pts = [cam((x, 2, z), kda_yaw(t), KDA_PITCH, *KDA_C)[:2] for x, z in ((-hs, -hs), (hs, -hs), (hs, hs), (-hs, hs))]
-        ds.append(poly_d(pts))
-    out.insert(0, path_anim(ts, ds, t_in, t_out, attrs=f'fill="url(#planeB)" stroke="{BLUE_LIGHT}" stroke-opacity="0.5" stroke-dasharray="6 5"'))
-    out.append(reveal(text(640, 82, "04 — KDA · KERNEL DESIGN AGENTS", "tag")
-                      + text(638, 128, "Faster, or it is not.", "h2")
-                      + text(640, 154, "Agents that research, write, verify and profile CUDA kernels.", "sub"), t_in + 0.2, t_out))
-    cw, ch = 252, 112
-    out.append(card(640, 186, cw, ch, roll(1.39, 9, "{:.2f}", 1.0, suffix="×"), "past the best human entries",
-                    "MLSys’26 FlashInfer · all 3 tracks", t_in + 0.6, t_out, big=False, accent=AMBER))
-    out.append(card(908, 186, cw, ch, ["#6", "#5", "#4", "#3", "#2", "#1"], "SOLExec Bench · L1 ops",
-                    "score 0.7608 · first place", t_in + 0.85, t_out, big=False))
-    out.append(card(640, 312, cw, ch, roll(53, 9), "first places on SOL Bench",
-                    "one 8×B200 node · one week", t_in + 1.1, t_out, big=False))
-    out.append(card(908, 312, cw, ch, roll(6.5, 9, "{:.1f}", 1.0, suffix="×"), "MSA indexer prefill · B300",
-                    "3.3× decode · bitwise-identical", t_in + 1.35, t_out, big=False))
-    out.append(reveal(text(640, 462, "merged into SGLang · 5.84× kernel geomean · lossless numerics", "lab")
-                      + text(640, 486, "B200 · B300 · CUDA · CuteDSL · HIP / ROCm", "code"), t_in + 1.8, t_out))
-    return "\n".join(out)
+def ch_latest(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        out = [g(f'<polygon points="{W},{H} {W},{H - 190} {n(W - 190 / SLOPE)},{H}" class="red"/>', enter(t0 + 0.2, 640, 0)),
+               g(text(W - 44, 74, "LATEST", "bk64", ' text-anchor="end"'), enter(t0 + 0.1, 420, 0))]
+        y = 80
+        for i, p in enumerate(f.posts):
+            lines = wrap(p.title, 22, 600, 2, True)
+            h = 27 * len(lines) + (22 if p.by else 0) + 30
+            if y + h > H - 60:
+                break
+            ti = t0 + 0.5 + 0.45 * i
+            row = (f'<rect x="64" y="{y}" width="92" height="28" class="{"red" if p.kind == "NEWS" else "inkf"}"/>'
+                   + text(76, y + 20, p.kind, "rev14") + text(64, y + 50, p.date.upper(), "m15")
+                   + "".join(text(180, y + 22 + 27 * j, ln, "bk22") for j, ln in enumerate(lines))
+                   + (text(180, y + 22 + 27 * len(lines), fit(p.by, 15, 600), "m15") if p.by else ""))
+            out.append(g(row, enter(ti, 0, 60, 0.35), appear(ti, 0.1)))
+            y += h
+        return "".join(out)
+    return draw
 
 
-def scene_bars():
-    t_in, t_out = 31.2, 38.9
-    out = []
-    ts = frames(t_in - 0.2, t_out + 0.2, 8)
-    order = sorted(BARS, key=lambda b: b[0])
-    for bx, pct in order:
-        faces = [[], [], []]
-        for t in ts:
-            hgt = max(3, pct * BAR_SCALE * bar_grow(t))
-            fs = box_faces(bx - 32, -32, 64, 64, hgt, BAR_YAW, BAR_PITCH, BAR_C)
-            for k in range(3):
-                faces[k].append(poly_d(fs[k]))
-        hero = pct > 1
-        base = AMBER if hero else BLUE_MID
-        cols = [mix(base, "#ffffff", 0.3), shade(base, 0.65), shade(base, 0.45)]
-        for k in range(3):
-            out.append(path_anim(ts, faces[k], t_in + 0.2, t_out - 0.1,
-                                 attrs=f'fill="{cols[k]}" stroke="{mix(base, "#ffffff", 0.55)}" stroke-opacity="0.5" stroke-width="0.8"'))
-    # floor plate
-    pts = [cam((x, 0, z), BAR_YAW, BAR_PITCH, *BAR_C)[:2] for x, z in ((-240, -110), (240, -110), (240, 110), (-240, 110))]
-    out.insert(0, reveal(f'<path d="{poly_d(pts)}" fill="url(#planeB)" stroke="{BLUE_LIGHT}" stroke-opacity="0.45"/>', t_in, t_out, dy=0))
-    labels = [("0.5%", "model A, alone"), ("0%", "model B, alone"), ("3.5%", "A ⇄ B in a loop")]
-    for (bx, pct), (val, cap) in zip(BARS, labels):
-        topx, topy = cam((bx, -pct * BAR_SCALE - 12, 0), BAR_YAW, BAR_PITCH, *BAR_C)[:2]
-        botx, boty = cam((bx, 0, -70), BAR_YAW, BAR_PITCH, *BAR_C)[:2]
-        cls = "barv" if pct > 1 else "barvs"
-        out.append(reveal(text(topx, topy - 8, val, cls, "middle"), 33.0 + pct * 0.12, t_out, dy=10))
-        out.append(reveal(text(botx, boty + 34, cap, "labs", "middle"), t_in + 0.8, t_out, dy=8))
-    out.append(reveal(text(640, 82, "05 — THE FLOW IS THE MULTIPLIER", "tag")
-                      + text(638, 128, "Same models. Better flow.", "h2")
-                      + text(640, 154, "Measured three ways: model level, tool level, flow level.", "sub"), t_in + 0.2, t_out))
-    out.append(card(640, 188, 520, 92, roll(3.5, 8, "{:.1f}", 0.0, suffix="%"), "ProgramBench · builder ⇄ reviewer",
-                    "vs 0.5% and 0% for the same two models alone", t_in + 0.6, t_out, cap_x=800, accent=AMBER))
-    out.append(card(640, 294, 520, 92, roll(19, 8), "Kaggle competitions · HKA",
-                    "ten workflows, scored by Kaggle, not by us", t_in + 0.9, t_out, cap_x=800))
-    chips = [("MODEL", 640), ("TOOL", 790), ("FLOW", 940)]
-    body = ""
-    for k, (lab, x) in enumerate(chips):
-        hl = k == 2
-        body += (f'<rect x="{x}" y="414" width="110" height="34" rx="17" fill="{AMBER if hl else "none"}" '
-                 f'fill-opacity="{0.16 if hl else 0}" stroke="{AMBER if hl else BLUE_LIGHT}" stroke-opacity="{0.9 if hl else 0.45}"/>'
-                 + text(x + 55, 436, lab, "chip" if not hl else "chipa", "middle"))
-        if k < 2:
-            body += f'<path d="M{x + 118} 431h26m-6 -5l6 5l-6 5" fill="none" stroke="{BLUE_LIGHT}" stroke-opacity="0.7"/>'
-    body += text(640, 478, "PutnamBench · Physics Cup · SuperChem · HLE — the flow is worth more", "labs")
-    body += text(640, 497, "than the gap between model generations.", "labs")
-    out.append(reveal(body, t_in + 1.3, t_out))
-    return "\n".join(out)
+def ch_people(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        out = []
+        intro = sentences(f.people_intro)[-1] if f.people_intro else ""
+        lines = wrap(intro, 22, 870, 2, True) if intro else []
+        base = 120 + 28 * len(lines) + 34   # the first row of faces, under the intro
+        if lines:
+            out.append(g("".join(text(64, 92 + 28 * j, ln, "bk22") for j, ln in enumerate(lines)), enter(t0 + 0.1, -520, 0)))
+        ppl = f.people[:24]
+        per = min(12, max(len(ppl), 1))
+        cw = (W - 128) / per
+        rows = math.ceil(len(ppl) / per)
+        for i, p in enumerate(ppl):
+            r, c = divmod(i, per)
+            cx, cy = 64 + c * cw + cw / 2, base + r * 104 - c * 4  # the grid rises with the diagonal
+            ti = t0 + 0.5 + 0.06 * i
+            if p.face:
+                face = (f'<g transform="translate({n(cx)} {n(cy)})"><image href="{p.face}" x="-28" y="-28" width="56" height="56" '
+                        f'clip-path="url(#face)" filter="url(#gray)"/></g>')
+            else:
+                face = (f'<circle cx="{n(cx)}" cy="{n(cy)}" r="28" class="inkf"/>'
+                        + text(cx, cy + 7, "".join(w[0] for w in p.name.split()[:2]), "rev19", ' text-anchor="middle"'))
+            ring = f'<circle cx="{n(cx)}" cy="{n(cy)}" r="28" class="{"ringr" if i % 4 == 0 else "ring"}"/>'
+            first = p.name.split()[0]
+            out.append(g(face + ring + text(cx, cy + 48, fit(first, 14, cw - 4), "n14", ' text-anchor="middle"'),
+                         enter(ti, 0, -420, 0.4)))
+        # How they work, on ink bars that extend one by one, and how to join in, on red.
+        top = base + rows * 104 - 14
+        half = t0 + 3.0
+        for j, s in enumerate(f.principles[:5]):
+            y = top + 26 * j
+            if y > H - 76:
+                break
+            out.append(f'<rect x="64" y="{y - 18}" width="8" height="24" class="red">{appear(half + 0.35 * j)}</rect>'
+                       + g(text(84, y, fit(s, 18, W - 150, True), "bk18"), appear(half + 0.35 * j), enter(half + 0.35 * j, 40, 0, 0.3)))
+        if f.contact:
+            what, where = f.contact[0]
+            out.append(g(f'<rect x="0" y="{H - 64}" width="{W}" height="44" class="red"/>'
+                         + text(64, H - 35, fit(f"{what} → {where.upper()}", 17, W - 128, True), "rev17"),
+                         enter(half + 2.2, -W, 0)))
+        return "".join(out)
+    return draw
 
 
-def scene_intro():
-    out = []
-    t_in, t_out = 3.6, 7.3
-    lx, ly = LOGO_C
-    sc = LOGO_H / 57
-    tf = f"translate({lx - 25.5 * sc:.2f} {ly - 28.5 * sc:.2f}) scale({sc:.4f})"
-    paths = "".join(f'<path transform="translate({tx} {ty})" d="{d}"/>' for d, tx, ty in LOGO_PATHS)
-    # outline draw + soft fill
-    out.append(f'<g transform="{tf}" opacity="0">{anim("opacity", window(4.4, t_out, 0.4))}'
-               f'<g transform="{LOGO_MATRIX}" fill="url(#logoFill)" stroke="{BLUE_PALE}" stroke-width="10" '
-               f'stroke-dasharray="4000" stroke-dashoffset="4000" fill-opacity="0">'
-               f'{anim("stroke-dashoffset", [(0, 4000), (4.4, 4000), (6.0, 0), (T, 0)])}'
-               f'{anim("fill-opacity", [(0, 0), (5.2, 0), (6.2, 0.22), (T, 0.22)])}{paths}</g></g>')
-    # shock ring + lens streak when the H locks in
-    out.append(f'<circle cx="{lx}" cy="{ly}" r="10" fill="none" stroke="{BLUE_PALE}" stroke-width="2" opacity="0">'
-               f'{anim("r", [(0, 10), (4.3, 10), (5.8, 560), (T, 560)])}'
-               f'{anim("opacity", [(0, 0), (4.3, 0), (4.35, 0.8), (5.8, 0), (T, 0)])}'
-               f'{anim("stroke-width", [(0, 6), (4.3, 6), (5.8, 0.5), (T, 0.5)])}</circle>')
-    out.append(f'<ellipse cx="{lx}" cy="{ly}" rx="560" ry="2.4" fill="url(#streak)" opacity="0">'
-               f'{anim("opacity", [(0, 0), (4.25, 0), (4.45, 0.95), (5.6, 0), (T, 0)])}'
-               f'{anim("ry", [(0, 2.4), (4.25, 2.4), (4.45, 5), (5.6, 1), (T, 1)])}</ellipse>')
-    out.append(reveal(text(600, 418, "HUMANFIA", "hero", "middle"), 4.6, t_out, dy=18))
-    out.append(typed(600 - 0.5 * 10.4 * 36, 460, "We build the flow around the agents.", 5.1, t_out, "tagline", 10.4 * 36))
-    out.append(reveal(text(600, 504, "HUMANIZE · FLOWVERSE · FLOWBENCH · HOA · HMA · KDA · HKA", "kicker", "middle"), 5.6, t_out, dy=8))
-    return "\n".join(out)
+def ch_outro(f: Facts) -> Draw:
+    def draw(t0: float, t1: float) -> str:
+        mark, lw, slot = logo_svg(f.logo, 90, 150, 250, "paperf")
+        sx, sy, sr = slot
+        site = SITE.split("//", 1)[-1].upper()
+        out = [f'<rect width="{W}" height="{H}" class="red"/>',
+               g(mark, enter(t0 + 0.2, -420, 0)),
+               g(text(370, 300, site, "huge2", f' style="font-size:{n(min(64, 64 * (W - 400) / width(site, 64, True)))}px"'),
+                 enter(t0 + 0.6, 640, 0)),
+               g(text(374, 352, "GITHUB.COM/HUMANFIA", "bk22i"), appear(t0 + 1.2)),
+               f'<rect x="374" y="372" height="10" class="inkf">{extend("width", t0 + 1.4, 400)}</rect>']
+        frames: list[Frame] = [(t0, sx, -60, sr), (t0 + 1.4, sx, -60, sr), (t0 + 1.9, sx, sy, sr)]
+        out.append(dot_track(frames + land(t0 + 1.9, slot) + [(t1 + 1, sx, sy, sr)], "inkf"))
+        return "".join(out)
+    return draw
 
 
-def scene_finale():
-    out = []
-    t_in, t_out = 39.0, 46.6
-    gx, gy = GLOBE_C
-    sc = 96 / 57
-    tf = f"translate({gx - 25.5 * sc:.2f} {gy - 28.5 * sc:.2f}) scale({sc:.4f})"
-    paths = "".join(f'<path transform="translate({tx} {ty})" d="{d}"/>' for d, tx, ty in LOGO_PATHS)
-    out.append(f'<circle cx="{gx}" cy="{gy}" r="150" fill="url(#core)" opacity="0">{anim("opacity", window(t_in + 0.6, t_out, 0.8, 0.9))}</circle>')
-    # globe wireframe: parallels are invariant under the spin, meridians repeat every 30 degrees,
-    # so they loop on their own short clock (phase-locked to the particles, which share t = 0)
-    def gp(v):
-        return cam(rot_x(v, 0.32), 0, 0, *GLOBE_C)[:2]
-    wire = []
-    for lat in (-60, -30, 0, 30, 60):
-        la = math.radians(lat)
-        pts = [gp((GLOBE_R * math.cos(la) * math.cos(a), GLOBE_R * math.sin(la), GLOBE_R * math.cos(la) * math.sin(a)))
-               for a in [2 * math.pi * k / 40 for k in range(40)]]
-        wire.append(f'<path d="{poly_d(pts)}" fill="none" stroke="{BLUE_LIGHT}" stroke-opacity="0.16"/>')
-    period = (math.pi / 6) / 0.45
-    for m in range(6):
-        ds = []
-        for fk in range(13):
-            ang = math.pi * m / 6 + 0.45 * period * fk / 12
-            pts = [gp(rot_y((GLOBE_R * math.cos(b), GLOBE_R * math.sin(b), 0), ang))
-                   for b in [2 * math.pi * k / 36 for k in range(36)]]
-            ds.append(poly_d(pts))
-        wire.append(f'<path d="{ds[0]}" fill="none" stroke="{BLUE_LIGHT}" stroke-opacity="0.2">'
-                    f'<animate attributeName="d" dur="{period:.4f}s" repeatCount="indefinite" values="{";".join(ds)}"/></path>')
-    out.append(f'<g opacity="0">{anim("opacity", window(t_in + 0.3, t_out, 0.9))}{"".join(wire)}</g>')
-    out.append(f'<g opacity="0">{anim("opacity", window(t_in + 1.0, t_out - 0.3, 0.8))}'
-               f'<g transform="{tf}"><g transform="{LOGO_MATRIX}" fill="{SLATE_PALE}">{paths}</g></g>'
-               '</g>')
-    out.append(reveal(text(600, 452, "HUMANFIA", "hero2", "middle"), t_in + 0.8, t_out, dy=16))
-    out.append(reveal(text(600, 484, "We build the flow around the agents. Built in public.", "tagline", "middle"), t_in + 1.2, t_out, dy=10))
-    chips = ["Humanize", "Flowverse", "FlowBench", "HOA", "HMA", "KDA", "HKA"]
-    widths = [len(c) * 8.4 + 30 for c in chips]
-    total = sum(widths) + 10 * (len(chips) - 1)
-    x = 600 - total / 2
-    for k, (c, w) in enumerate(zip(chips, widths)):
-        hl = c == "Humanize"
-        body = (f'<rect x="{x:.0f}" y="503" width="{w:.0f}" height="28" rx="14" fill="{AMBER if hl else BLUE_MID}" '
-                f'fill-opacity="{0.18 if hl else 0.10}" stroke="{AMBER if hl else BLUE_LIGHT}" stroke-opacity="0.55"/>'
-                + text(x + w / 2, 522, c, "chipa" if hl else "chip", "middle"))
-        out.append(reveal(body, t_in + 1.6 + 0.09 * k, t_out, dy=10))
-        x += w + 10
-    out.append(reveal(text(600, 555, "humanfia.ai   ·   docs.humanfia.ai/humanize   ·   github.com/humanfia", "code", "middle"),
-                      t_in + 2.4, t_out, dy=6))
-    return "\n".join(out)
+def scenes(f: Facts) -> list[Scene]:
+    """The storyboard: a chapter appears only if the site gave it something to say."""
+    out = [Scene("Humanfia", 12, ch_mark(f))]
+    if f.headline:
+        out.append(Scene("The thesis", 14, ch_thesis(f)))
+    if f.bands:
+        out.append(Scene("Humanize, the runtime", 11, ch_stack(f)))
+    if any(b.down.lower().startswith("a turn") for b in f.bands) or f.features:
+        out.append(Scene("A turn, and what it keeps", 11, ch_turn(f)))
+    if f.flows:
+        out.append(Scene("Flows", 9, ch_flows(f)))
+    if f.loop:
+        out.append(Scene(f"A flow, running: {f.loop.name}", 11, ch_loop(f)))
+    if f.projects:
+        out.append(Scene("Projects", 14, ch_projects(f)))
+    if f.posts:
+        out.append(Scene("News and blog", 11, ch_latest(f)))
+    if f.people:
+        out.append(Scene("The people", 13, ch_people(f)))
+    out.append(Scene("Find us", 8, ch_outro(f)))
+    return out
 
 
-# ------------------------------------------------------------------------------- background
+# ------------------------------------------------------------------------------------ the banner
 
-def background():
-    out = []
-    # drifting nebulae
-    for cx_, cy_, rx, ry, grad, mv in [(260, 150, 520, 320, "neb1", "60 30"), (960, 470, 560, 330, "neb2", "-70 -20"),
-                                        (700, 80, 380, 220, "neb3", "-40 25")]:
-        out.append(f'<ellipse cx="{cx_}" cy="{cy_}" rx="{rx}" ry="{ry}" fill="url(#{grad})">'
-                   f'<animateTransform attributeName="transform" type="translate" dur="24s" repeatCount="indefinite" '
-                   f'values="0 0;{mv};0 0" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1"/></ellipse>')
-    # perspective floor grid
-    hz = 430
-    g = [f'<g opacity="0.55" mask="url(#floorMask)">']
-    for k in range(-14, 15):
-        x2 = 600 + k * 150
-        g.append(f'<line x1="{600 + k * 18}" y1="{hz}" x2="{x2}" y2="{H + 20}" stroke="{BLUE_MID}" stroke-opacity="0.35" stroke-width="1"/>')
-    nl = 9
-    period = 3.0
-    ys = [hz + 900 / (z) for z in [60 - 50 * k / 11 for k in range(12)]]
-    vals = ";".join(f"{min(y, H + 30):.1f}" for y in ys)
-    for k in range(nl):
-        g.append(f'<rect x="0" width="{W}" height="1" fill="{BLUE_MID}" fill-opacity="0.4">'
-                 f'<animate attributeName="y" dur="{period}s" begin="{-period * k / nl:.2f}s" repeatCount="indefinite" values="{vals}"/></rect>')
-    g.append("</g>")
-    out.append("".join(g))
-    # twinkling dust
-    for _ in range(90):
-        x, y = rng.uniform(0, W), rng.uniform(0, H)
-        r = rng.uniform(0.4, 1.2)
-        d = rng.uniform(2.5, 6)
-        out.append(f'<circle cx="{x:.0f}" cy="{y:.0f}" r="{f(r)}" fill="{rng.choice([BLUE_PALE, SLATE_PALE, BLUE_LIGHT])}" opacity="0.2">'
-                   f'<animate attributeName="opacity" dur="{f(d)}s" begin="-{f(rng.uniform(0, d))}s" repeatCount="indefinite" '
-                   f'values="0.08;{f(rng.uniform(0.4, 0.9), 2)};0.08"/></circle>')
-    return "\n".join(out)
+def wipe(t: float, cls: str) -> str:
+    """A diagonal plane crossing the frame, centred on t; the cut between chapters happens under it."""
+    skew = H * SLOPE * 2.2
+    wp = W + 440
+    poly = f'<polygon points="0,0 {n(wp)},0 {n(wp - skew)},{H} {n(-skew)},{H}" class="{cls}"/>'
+    a, b, d = -wp, W + skew, 0.8
+    return g(poly, move([(0, a, 0), (t - d / 2, a, 0), (t + d / 2, b, 0)]))
 
 
-CHAPTERS = [("INTRO", 0.0, 7.4), ("HUMANIZE", 7.4, 15.6), ("HOA", 15.6, 23.6), ("KDA", 23.6, 31.4),
-            ("FLOW > MODEL", 31.4, 38.9), ("BUILT IN PUBLIC", 38.9, T)]
+def css(theme: str) -> str:
+    c = THEMES[theme]
+    blk = f"font-family:{BLOCK};font-weight:900"
+    return (f".bg{{fill:{c['paper']}}}.inkf{{fill:{c['ink']}}}.paperf{{fill:{c['paper']}}}.red{{fill:{c['red']}}}"
+            f".chip{{fill:{c['ink']};fill-opacity:.12}}.ring,.ringr{{fill:none;stroke:{c['ink']};stroke-width:3}}"
+            f".ringr{{stroke:{c['red']}}}.wire{{stroke:{c['ink']};stroke-width:4;stroke-dasharray:12 8}}"
+            f"text{{font-family:{SANS};fill:{c['ink']}}}"
+            f".kick{{font-size:15px;font-weight:800;letter-spacing:.16em}}"
+            f".glyph{{fill:none;stroke:{c['ink']};stroke-width:{n(S)}}}.huge{{{blk};font-size:170px;letter-spacing:-.04em}}"
+            f".huge2{{{blk};font-size:64px;fill:{c['paper']}}}"
+            + "".join(f".bk{s}{{{blk};font-size:{s}px}}" for s in (17, 18, 22, 24, 26, 40, 48, 64))
+            + "".join(f".bk{s}{k}{{{blk};font-size:{s}px;fill:{c['paper']}}}" for s, k in ((30, "r"), (40, "p"), (48, "p")))
+            + f".bk22i{{{blk};font-size:22px;letter-spacing:.08em;fill:{c['ink']}}}"
+            f".rev,.rev14,.rev17,.rev19{{{blk};fill:{c['paper']}}}"
+            f".rev{{font-size:22px}}.rev14{{font-size:14px;letter-spacing:.06em}}.rev17{{font-size:17px}}.rev19{{font-size:19px}}"
+            f".b20{{font-size:20px;font-weight:800}}.m15{{font-size:15px;fill:{c['mute']}}}.n14{{font-size:14px;font-weight:700}}"
+            f".i15{{font-size:15px;font-style:italic;fill:{c['mute']}}}.c15{{font-size:15px;font-weight:700}}"
+            f".c15r{{font-size:15px;font-weight:700;fill:{c['paper']}}}")
 
 
-def hud():
-    out = []
-    sc = 22 / 57
-    paths = "".join(f'<path transform="translate({tx} {ty})" d="{d}"/>' for d, tx, ty in LOGO_PATHS)
-    out.append(f'<g transform="translate(36 26) scale({sc:.4f})"><g transform="{LOGO_MATRIX}" fill="{SLATE_PALE}">{paths}</g></g>')
-    out.append(text(66, 43, "HUMANFIA", "hud"))
-    out.append(text(W - 36, 43, "AGENT FLOW SYSTEMS · 2026", "hudr", "end"))
-    # corner brackets
-    for (x, y, sx, sy) in [(18, 18, 1, 1), (W - 18, 18, -1, 1), (18, H - 18, 1, -1), (W - 18, H - 18, -1, -1)]:
-        out.append(f'<path d="M{x} {y + 22 * sy}V{y}H{x + 22 * sx}" fill="none" stroke="{BLUE_LIGHT}" stroke-opacity="0.45" stroke-width="1.5"/>')
-    # chapter bar
-    x0, x1, y = 60, W - 60, 582
-    gap = 10
-    seg_w = (x1 - x0 - gap * (len(CHAPTERS) - 1)) / len(CHAPTERS)
-    for k, (name, a, b) in enumerate(CHAPTERS):
-        x = x0 + k * (seg_w + gap)
-        out.append(f'<rect x="{x:.1f}" y="{y}" width="{seg_w:.1f}" height="2" rx="1" fill="{BLUE_LIGHT}" fill-opacity="0.18"/>')
-        out.append(f'<rect x="{x:.1f}" y="{y}" width="0" height="2" rx="1" fill="url(#barFill)">'
-                   + anim("width", [(0, 0), (a, 0), (b, f(seg_w)), (T - 0.001, f(seg_w)), (T, 0)]) + "</rect>")
-        on = [(0, 0.35), (a, 0.35), (a + 0.3, 1), (b - 0.3, 1), (b, 0.35)] if k else [(0, 1), (b - 0.3, 1), (b, 0.35), (T - 0.4, 0.35), (T, 1)]
-        out.append(f'<g opacity="0.35">{anim("opacity", on)}{text(x, y - 9, f"0{k + 1}  {name}", "chap")}</g>')
-    return "\n".join(out)
+def banner(theme: str, f: Facts) -> str:
+    plan = scenes(f)
+    scale = T / sum(s.seconds for s in plan)
+    t, layers, cuts = 0.0, [], []
+    for k, s in enumerate(plan, 1):
+        t0, t1 = t, t + s.seconds * scale
+        layers.append(f'<g opacity="{1 if k == 1 else 0}">{on(t0, t1)}{s.draw(t0, t1)}{kicker(48, 40, k, s.kicker)}</g>')
+        cuts.append(t1)
+        t = t1
+    # The last cut is the loop's seam: wipe just before it so the plane is gone when the clock restarts.
+    wipes = "".join(wipe(min(cut, T - 0.41), "red" if i % 2 else "inkf") for i, cut in enumerate(cuts))
+    # The clock itself: a rail across the foot, ticked at each chapter, with a red block travelling it.
+    rail = (f'<rect x="0" y="{H - 6}" width="{W}" height="6" class="chip"/>'
+            + "".join(f'<rect x="{n(W * cut / T - 1)}" y="{H - 6}" width="2" height="6" class="bg"/>' for cut in cuts[:-1])
+            + f'<rect x="-40" y="{H - 6}" width="40" height="6" class="red">{anim("x", [(0, -40), (T, W)])}</rect>')
+    title = "Humanfia" + (f" — {f.headline}" if f.headline else "")
+    return (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
+        f'aria-labelledby="t"><title id="t">{esc(title)}</title><style>{css(theme)}</style>'
+        f'<defs><clipPath id="face"><circle r="28"/></clipPath>'
+        f'<filter id="gray"><feColorMatrix type="saturate" values="0"/></filter></defs>'
+        f'<rect width="{W}" height="{H}" class="bg"/>{"".join(layers)}{wipes}{rail}</svg>\n'
+    )
 
 
-DEFS = f"""
-<defs>
-  <radialGradient id="gB"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.3" stop-color="{BLUE_LIGHT}"/><stop offset="1" stop-color="{BLUE_MID}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gP"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.35" stop-color="{BLUE_PALE}"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gW"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.3" stop-color="{SLATE_PALE}" stop-opacity="0.9"/><stop offset="1" stop-color="{SLATE_PALE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gA"><stop offset="0" stop-color="{AMBER_HI}"/><stop offset="0.3" stop-color="{AMBER}"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb1"><stop offset="0" stop-color="{NEB[0]}" stop-opacity="{NEB[1]}"/><stop offset="1" stop-color="{NEB[0]}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb2"><stop offset="0" stop-color="{NEB[2]}" stop-opacity="{NEB[3]}"/><stop offset="1" stop-color="{NEB[2]}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="neb3"><stop offset="0" stop-color="{NEB[4]}" stop-opacity="{NEB[5]}"/><stop offset="1" stop-color="{NEB[4]}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="core"><stop offset="0" stop-color="{BLUE_LIGHT}" stop-opacity="0.35"/><stop offset="0.55" stop-color="{BLUE}" stop-opacity="0.12"/><stop offset="1" stop-color="{BLUE}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="vign" cx="0.5" cy="0.45" r="0.75"><stop offset="0.6" stop-color="{VIGN[0]}" stop-opacity="0"/><stop offset="1" stop-color="{VIGN[0]}" stop-opacity="{VIGN[1]}"/></radialGradient>
-  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{BG_STOPS[0]}"/><stop offset="0.6" stop-color="{BG_STOPS[1]}"/><stop offset="1" stop-color="{BG_STOPS[2]}"/></linearGradient>
-  <linearGradient id="streak" x1="0" x2="1"><stop offset="0" stop-color="{BLUE_PALE}" stop-opacity="0"/><stop offset="0.5" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_PALE}" stop-opacity="0"/></linearGradient>
-  <linearGradient id="logoFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
-  <linearGradient id="numFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_LIGHT}"/></linearGradient>
-  <linearGradient id="numAmber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{AMBER_HI}"/><stop offset="1" stop-color="{AMBER}"/></linearGradient>
-  <linearGradient id="heroFill" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{BLUE_PALE}"/><stop offset="0.5" stop-color="{WHITE}"/><stop offset="1" stop-color="{BLUE_PALE}"/></linearGradient>
-  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{GLASS[0]}" stop-opacity="{GLASS[1]}"/><stop offset="1" stop-color="{GLASS[0]}" stop-opacity="{GLASS[2]}"/></linearGradient>
-  <linearGradient id="planeB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{BLUE_MID}" stop-opacity="0.22"/><stop offset="1" stop-color="{BLUE}" stop-opacity="0.05"/></linearGradient>
-  <linearGradient id="planeA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{AMBER}" stop-opacity="0.28"/><stop offset="1" stop-color="{AMBER_DARK}" stop-opacity="0.06"/></linearGradient>
-  <linearGradient id="barFill" x1="0" x2="1"><stop offset="0" stop-color="{BLUE_LIGHT}"/><stop offset="1" stop-color="{AMBER}"/></linearGradient>
-  <linearGradient id="floorFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity="0.5"/></linearGradient>
-  <mask id="floorMask"><rect x="0" y="430" width="{W}" height="{H - 430}" fill="url(#floorFade)"/></mask>
-  <clipPath id="frame"><rect width="{W}" height="{H}" rx="18"/></clipPath>
-</defs>
-<style>
-  text {{ font-family: {SANS}; }}
-  .hero {{ font-size: 64px; font-weight: 800; letter-spacing: 20px; fill: url(#heroFill); }}
-  .hero2 {{ font-size: 46px; font-weight: 800; letter-spacing: 16px; fill: url(#heroFill); }}
-  .tagline {{ font-size: 21px; font-weight: 400; fill: {BLUE_PALE}; font-family: {MONO}; }}
-  .kicker {{ font-size: 13px; letter-spacing: 3px; fill: {BLUE_LIGHT}; font-family: {MONO}; opacity: 0.8; }}
-  .h1 {{ font-size: 46px; font-weight: 800; fill: {TXT_STRONG}; letter-spacing: -0.5px; }}
-  .h2 {{ font-size: 36px; font-weight: 800; fill: {TXT_STRONG}; letter-spacing: -0.5px; }}
-  .sub {{ font-size: 16px; fill: {TXT_SUB}; }}
-  .tag {{ font-size: 13px; font-weight: 600; letter-spacing: 2.5px; fill: {AMBER}; font-family: {MONO}; }}
-  .tagb {{ font-size: 13px; font-weight: 600; letter-spacing: 2.5px; fill: {BLUE_LIGHT}; font-family: {MONO}; }}
-  .lab {{ font-size: 17px; font-weight: 650; fill: {SLATE_PALE}; }}
-  .lab2 {{ font-size: 15px; font-weight: 650; fill: {SLATE_PALE}; }}
-  .labs {{ font-size: 13.5px; fill: {TXT_SUB}; }}
-  .num {{ font-size: 46px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }}
-  .nums {{ font-size: 40px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }}
-  .barv {{ font-size: 30px; font-weight: 800; fill: url(#numAmber); }}
-  .barvs {{ font-size: 20px; font-weight: 700; fill: {BLUE_PALE}; }}
-  .agent {{ font-size: 15px; font-weight: 600; fill: {SLATE_PALE}; font-family: {MONO}; }}
-  .glyph {{ font-size: 26px; fill: {BLUE_PALE}; font-family: 'STIX Two Math', 'Cambria Math', serif; }}
-  .cmd {{ font-size: 20px; fill: {SLATE_PALE}; font-family: {MONO}; }}
-  .code {{ font-size: 14px; fill: {BLUE_LIGHT}; font-family: {MONO}; }}
-  .codeok {{ font-size: 14px; fill: {TXT_OK}; font-family: {MONO}; }}
-  .chip {{ font-size: 14px; font-weight: 600; fill: {BLUE_PALE}; font-family: {MONO}; }}
-  .chipa {{ font-size: 14px; font-weight: 700; fill: {AMBER}; font-family: {MONO}; }}
-  .hud {{ font-size: 14px; font-weight: 700; letter-spacing: 5px; fill: {SLATE_PALE}; }}
-  .hudr {{ font-size: 12px; letter-spacing: 3px; fill: {BLUE_LIGHT}; font-family: {MONO}; opacity: 0.75; }}
-  .chap {{ font-size: 12px; letter-spacing: 2px; fill: {BLUE_PALE}; font-family: {MONO}; }}
-</style>
-"""
+# ----------------------------------------------------------------------------------------- main
 
-
-def main():
-    body = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
-        f'aria-labelledby="ttl desc">',
-        '<title id="ttl">Humanfia — we build the flow around the agents</title>',
-        '<desc id="desc">Animated portfolio: Humanize agent flow system; HOA (IMO 2026 6/6, Lean-Eval #1, '
-        'PutnamBench 670/672); KDA (1.39× past human SOTA, #1 SOLExec L1, 53 SOL Bench firsts, 6.5× MSA indexer); '
-        'ProgramBench 3.5% with a builder-reviewer loop; HKA on 19 Kaggle competitions.</desc>',
-        DEFS,
-        '<g clip-path="url(#frame)">',
-        f'<rect width="{W}" height="{H}" fill="url(#bg)"/>',
-        background(),
-        scene_flow(), scene_hoa(), scene_kda(), scene_bars(),
-        scene_intro(), scene_finale(),
-        '<g id="particles">', particles_svg(), '</g>',
-        f'<rect width="{W}" height="{H}" fill="url(#vign)" pointer-events="none"/>',
-        hud(),
-        f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="18" fill="none" stroke="{BLUE_LIGHT}" stroke-opacity="0.18"/>',
-        '</g></svg>',
-    ]
-    svg = "\n".join(body)
-    here = os.path.dirname(os.path.abspath(__file__))
-    out = os.path.join(here, "..", "profile", f"humanfia-portfolio-{THEME}.svg")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write(svg)
-    print(f"wrote {os.path.normpath(out)}  ({len(svg) / 1024:.0f} KiB)")
+def main() -> None:
+    themes = [os.environ["THEME"]] if os.environ.get("THEME") else ["light", "dark"]
+    facts = gather()
+    for theme in themes:
+        out = PROFILE / f"humanfia-portfolio-{theme}.svg"
+        out.write_text(banner(theme, facts), encoding="utf-8")
+        print(f"wrote {out.relative_to(ROOT)} ({out.stat().st_size // 1024} KB)")
 
 
 if __name__ == "__main__":
-    if "THEME" in os.environ:
-        main()
-    else:  # build both variants; each run re-seeds the RNG so the two stay frame-for-frame identical
-        import subprocess
-        import sys
-        for theme in ("dark", "light"):
-            subprocess.run([sys.executable, os.path.abspath(__file__)], env={**os.environ, "THEME": theme}, check=True)
+    main()
