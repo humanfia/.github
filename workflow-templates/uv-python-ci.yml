@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [$default-branch]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # uv lock --check, ruff check, ruff format --check, then pytest on ubuntu and macos.
+  ci:
+    uses: humanfia/.github/.github/workflows/uv-python-ci.yml@d74f9b62af6827996c0d0ad59808bedbb902a945 # main, 2026-10-05

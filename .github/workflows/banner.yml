@@ -1,0 +1,33 @@
+# Checks the banners in profile/ are what tools/gen_portfolio.py makes, so an edit to one is made
+# in the generator and survives the next rebuild.
+
+name: banner
+
+on:
+  push:
+    branches: [main]
+    paths: [tools/**, profile/*.svg, .github/workflows/banner.yml]
+  pull_request:
+    paths: [tools/**, profile/*.svg, .github/workflows/banner.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  banner:
+    name: banner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The banners are up to date
+        run: |
+          python3 tools/gen_portfolio.py
+          git diff --exit-code -- profile/
