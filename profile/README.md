@@ -3,7 +3,7 @@
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="./humanfia-portfolio-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="./humanfia-portfolio-light.svg">
-      <img src="./humanfia-portfolio-dark.svg" width="100%" alt="Humanfia — we build the flow around the agents. Humanize 2, HOA, KDA, HKA, FlowBench." />
+      <img src="./humanfia-portfolio-dark.svg" width="100%" alt="Humanfia — we build the flow around the agents. Humanize, Flowverse, FlowBench, HOA, HMA, KDA, HKA." />
     </picture>
   </a>
 </p>

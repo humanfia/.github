@@ -275,7 +275,7 @@ def F_logo(p, t):
     return x, y, p.base * 1.9 * s, shimmer
 
 
-# Humanize 2 stack ---------------------------------------------------------------------------
+# Humanize stack ---------------------------------------------------------------------------
 FLOW_C = (330, 330)
 PLANE_Y = [-120, -40, 40, 120]
 PLANE_HALF = 122
@@ -642,7 +642,7 @@ def scene_flow():
     label_y = [198, 278, 358, 438]
     rows = [
         ("FLOWS", "RLAR · Flame Chase · Humanize 1 · Ralph Loop", "the method, as code — humanfia/flowverse"),
-        ("RUNTIME", "Humanize 2", "sessions · budgets · traces · worktrees · containers · ssh"),
+        ("RUNTIME", "Humanize", "sessions · budgets · traces · worktrees · containers · ssh"),
         ("AGENTS", "the CLIs you already log into", "claude · codex · dsh · agy · grok · kimi · qwen · pi · opencode · mimo"),
         ("APPLICATIONS", "HOA · KDA · HKA", "where a flow is found out — someone else keeps the scoreboard"),
     ]
@@ -656,7 +656,7 @@ def scene_flow():
                 + text(664, y + 27, sub, "labs"))
         out.append(reveal(body, t_in + 0.5 + 0.25 * k, t_out, dx=24, dy=0))
     out.append(reveal(text(664, 82, "02 — THE RUNTIME", "tag")
-                      + text(662, 128, "Humanize 2", "h1")
+                      + text(662, 128, "Humanize", "h1")
                       + text(664, 152, "Agent Flow System — the flow around the agents", "sub"), t_in + 0.2, t_out))
     # FlowBench arc label
     out.append(reveal(f'<path d="M46 112 l6 -8 l6 8" fill="none" stroke="{AMBER}" stroke-width="1.6"/>'
@@ -931,7 +931,7 @@ def scene_intro():
                f'{anim("ry", [(0, 2.4), (4.25, 2.4), (4.45, 5), (5.6, 1), (T, 1)])}</ellipse>')
     out.append(reveal(text(600, 418, "HUMANFIA", "hero", "middle"), 4.6, t_out, dy=18))
     out.append(typed(600 - 0.5 * 10.4 * 36, 460, "We build the flow around the agents.", 5.1, t_out, "tagline", 10.4 * 36))
-    out.append(reveal(text(600, 504, "HUMANIZE · FLOWVERSE · FLOWBENCH · HOA · KDA · HKA", "kicker", "middle"), 5.6, t_out, dy=8))
+    out.append(reveal(text(600, 504, "HUMANIZE · FLOWVERSE · FLOWBENCH · HOA · HMA · KDA · HKA", "kicker", "middle"), 5.6, t_out, dy=8))
     return "\n".join(out)
 
 
@@ -969,12 +969,12 @@ def scene_finale():
                '</g>')
     out.append(reveal(text(600, 452, "HUMANFIA", "hero2", "middle"), t_in + 0.8, t_out, dy=16))
     out.append(reveal(text(600, 484, "We build the flow around the agents. Built in public.", "tagline", "middle"), t_in + 1.2, t_out, dy=10))
-    chips = ["Humanize 2", "Flowverse", "FlowBench", "HOA", "KDA", "HKA", "oh-my-humanize"]
+    chips = ["Humanize", "Flowverse", "FlowBench", "HOA", "HMA", "KDA", "HKA"]
     widths = [len(c) * 8.4 + 30 for c in chips]
     total = sum(widths) + 10 * (len(chips) - 1)
     x = 600 - total / 2
     for k, (c, w) in enumerate(zip(chips, widths)):
-        hl = c == "Humanize 2"
+        hl = c == "Humanize"
         body = (f'<rect x="{x:.0f}" y="503" width="{w:.0f}" height="28" rx="14" fill="{AMBER if hl else BLUE_MID}" '
                 f'fill-opacity="{0.18 if hl else 0.10}" stroke="{AMBER if hl else BLUE_LIGHT}" stroke-opacity="0.55"/>'
                 + text(x + w / 2, 522, c, "chipa" if hl else "chip", "middle"))
@@ -1021,7 +1021,7 @@ def background():
     return "\n".join(out)
 
 
-CHAPTERS = [("INTRO", 0.0, 7.4), ("HUMANIZE 2", 7.4, 15.6), ("HOA", 15.6, 23.6), ("KDA", 23.6, 31.4),
+CHAPTERS = [("INTRO", 0.0, 7.4), ("HUMANIZE", 7.4, 15.6), ("HOA", 15.6, 23.6), ("KDA", 23.6, 31.4),
             ("FLOW > MODEL", 31.4, 38.9), ("BUILT IN PUBLIC", 38.9, T)]
 
 
@@ -1111,7 +1111,7 @@ def main():
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
         f'aria-labelledby="ttl desc">',
         '<title id="ttl">Humanfia — we build the flow around the agents</title>',
-        '<desc id="desc">Animated portfolio: Humanize 2 agent flow system; HOA (IMO 2026 6/6, Lean-Eval #1, '
+        '<desc id="desc">Animated portfolio: Humanize agent flow system; HOA (IMO 2026 6/6, Lean-Eval #1, '
         'PutnamBench 670/672); KDA (1.39× past human SOTA, #1 SOLExec L1, 53 SOL Bench firsts, 6.5× MSA indexer); '
         'ProgramBench 3.5% with a builder-reviewer loop; HKA on 19 Kaggle competitions.</desc>',
         DEFS,
