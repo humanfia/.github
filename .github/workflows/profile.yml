@@ -1,9 +1,9 @@
 # The org profile is generated from humanfia.ai, so it is rebuilt whenever the site may have
 # changed. Every half hour this looks up the commit humanfia.ai last deployed -- public data,
 # read with this workflow's own token, so humanfia.ai needs no secret to tell us -- and stops
-# there if it is the one `profile/.source-sha` says the profile was last built from. Once a
-# day, by hand, and on a `humanfia-ai-deployed` dispatch it rebuilds regardless. A run that
-# changes nothing commits nothing.
+# there if it is the one `profile/.source-sha` says the profile was last built from. A run by
+# hand does the same unless `force` is ticked. Once a day and on a `humanfia-ai-deployed`
+# dispatch it rebuilds regardless. A run that changes nothing commits nothing.
 
 name: profile
 
@@ -16,6 +16,11 @@ on:
   repository_dispatch:
     types: [humanfia-ai-deployed]
   workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if humanfia.ai has not deployed since the last build
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -48,12 +53,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           CRON: ${{ github.event.schedule }}
+          FORCE: ${{ inputs.force }}
         run: |
           sha=$(gh api "repos/humanfia/humanfia.ai/actions/workflows/deploy.yml/runs?branch=main&event=push&status=success&per_page=10" \
             --jq '[.workflow_runs[] | select(.updated_at < (now - 600 | todate))][0].head_sha // ""')
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           built=$(cat profile/.source-sha 2>/dev/null || true)
-          if [ "$EVENT" = schedule ] && [ "$CRON" != "17 5 * * *" ] && { [ -z "$sha" ] || [ "$sha" = "$built" ]; }; then
+          # The daily run, a dispatch and a forced run by hand rebuild whatever was deployed.
+          case "$EVENT/$CRON/$FORCE" in
+            "schedule/17 5 * * */"* | repository_dispatch/* | workflow_dispatch/*/true) watch=false ;;
+            *) watch=true ;;
+          esac
+          if [ "$watch" = true ] && { [ -z "$sha" ] || [ "$sha" = "$built" ]; }; then
             echo "The profile is built from humanfia.ai@${built:-?}, its latest deploy; nothing to do."
             echo "stale=false" >> "$GITHUB_OUTPUT"
           else

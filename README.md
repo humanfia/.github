@@ -81,8 +81,8 @@ newer commit, in a pull request of its own.
   share its time. Any other failure exits non-zero and changes nothing.
 - `.github/workflows/profile.yml` checks every half hour whether humanfia.ai has deployed a commit the profile was
   not built from (`profile/.source-sha`), reading the site's public `deploy` runs with its own token, and runs the
-  generator only if so. It also runs the generator daily, by hand, and on a `humanfia-ai-deployed`
-  `repository_dispatch`. It commits only when an SVG or `profile/.source-sha` changed.
+  generator only if so. A run by hand checks the same way unless `force` is set. It runs the generator regardless
+  daily and on a `humanfia-ai-deployed` `repository_dispatch`. It commits only when an SVG or `profile/.source-sha` changed.
 
 ### Usage
 
