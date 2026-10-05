@@ -759,6 +759,10 @@ def ch_mark(f: Facts) -> Draw:
             x1 = lx + lw + 300 if i == 2 else lx + lw * (i + 1) / 3 + 0.5
             cuts.append(f'<clipPath id="cut{i}"><rect x="{n(x0)}" y="-600" width="{n(x1 - x0)}" height="1800"/></clipPath>')
             parts.append(f'<g clip-path="url(#cut{i})">{g(mark, enter(t0 + 0.3 + 0.35 * i, dx, dy, 0.6))}</g>')
+        # Once the planes have locked, the whole mark takes their place, so no seam shows where they met.
+        locked = t0 + 1.7
+        parts = [g("".join(parts), anim("opacity", [(0, 1), (locked, 0)], discrete=True)),
+                 g(mark, anim("opacity", [(0, 0), (locked, 1)], discrete=True))]
         letters, idot, _ = wordmark(450, 330, 1.25)
         word = g(letters, enter(t0 + 2.0, 0, 160, 0.45), appear(t0 + 2.0, 0.1))
         # The red circle rolls down the diagonal from the right edge and drops into the H's slot,
@@ -1015,15 +1019,17 @@ def ch_people(f: Facts) -> Draw:
     def draw(t0: float, t1: float) -> str:
         out = []
         intro = sentences(f.people_intro)[-1] if f.people_intro else ""
-        if intro:
-            out.append(g(text(64, 100, fit(intro, 26, 870, True), "bk26"), enter(t0 + 0.1, -520, 0)))
+        lines = wrap(intro, 22, 870, 2, True) if intro else []
+        base = 120 + 28 * len(lines) + 34   # the first row of faces, under the intro
+        if lines:
+            out.append(g("".join(text(64, 92 + 28 * j, ln, "bk22") for j, ln in enumerate(lines)), enter(t0 + 0.1, -520, 0)))
         ppl = f.people[:24]
         per = min(12, max(len(ppl), 1))
         cw = (W - 128) / per
         rows = math.ceil(len(ppl) / per)
         for i, p in enumerate(ppl):
             r, c = divmod(i, per)
-            cx, cy = 64 + c * cw + cw / 2, 176 + r * 104 - c * 4  # the grid rises with the diagonal
+            cx, cy = 64 + c * cw + cw / 2, base + r * 104 - c * 4  # the grid rises with the diagonal
             ti = t0 + 0.5 + 0.06 * i
             if p.face:
                 face = (f'<g transform="translate({n(cx)} {n(cy)})"><image href="{p.face}" x="-28" y="-28" width="56" height="56" '
@@ -1036,7 +1042,7 @@ def ch_people(f: Facts) -> Draw:
             out.append(g(face + ring + text(cx, cy + 48, fit(first, 14, cw - 4), "n14", ' text-anchor="middle"'),
                          enter(ti, 0, -420, 0.4)))
         # How they work, on ink bars that extend one by one, and how to join in, on red.
-        top = 176 + rows * 104 - 14
+        top = base + rows * 104 - 14
         half = t0 + 3.0
         for j, s in enumerate(f.principles[:5]):
             y = top + 26 * j
