@@ -43,11 +43,15 @@ concurrency:
 
 jobs:
   ci:
-    uses: humanfia/.github/.github/workflows/uv-python-ci.yml@main
+    uses: humanfia/.github/.github/workflows/uv-python-ci.yml@d74f9b62af6827996c0d0ad59808bedbb902a945 # main, 2026-10-05
 ```
 
 The checks then show as `ci / lint`, `ci / test (ubuntu-latest)` and `ci / test (macos-latest)`.
-A change to the workflow here reaches every caller on its next run, so it is reviewed as one.
+
+The organization requires every `uses:` to be pinned to a full commit SHA, a shared workflow
+included: a tag or `@main` fails the run before any step. So a caller names a commit of this
+repository's `main`, and a change here reaches a caller only when that caller moves its SHA to a
+newer commit, in a pull request of its own.
 
 ## The banner
 

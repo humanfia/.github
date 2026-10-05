@@ -3,8 +3,9 @@
 #
 #   jobs:
 #     ci:
-#       uses: humanfia/.github/.github/workflows/uv-python-ci.yml@main
+#       uses: humanfia/.github/.github/workflows/uv-python-ci.yml@<a commit of main>
 #
+# pinned to a full commit SHA, as the organization requires of every `uses:`.
 # workflow-templates/uv-python-ci.yml is that workflow, ready to copy. No concurrency group here:
 # the caller's covers this, and the same group in both would cancel the run it belongs to.
 
