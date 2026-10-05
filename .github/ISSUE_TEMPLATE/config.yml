@@ -1,0 +1,13 @@
+# The default for every humanfia repository without an ISSUE_TEMPLATE folder of its own.
+# Blank issues stay on, for questions: SUPPORT.md sends them here.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/humanfia/.github/blob/main/SECURITY.md
+    about: Privately, never in a public issue, from the repository's Security tab. This says how.
+  - name: Documentation
+    url: https://docs.humanfia.ai/
+    about: The documentation of humanfia's projects, for those that have it.
+  - name: Getting help
+    url: https://github.com/humanfia/.github/blob/main/SUPPORT.md
+    about: Where to look first, and where to ask.

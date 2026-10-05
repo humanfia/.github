@@ -1,0 +1,7 @@
+{
+  "name": "uv Python CI",
+  "description": "humanfia's CI for a Python repository built with uv: the lockfile, ruff and pytest on Linux and macOS.",
+  "iconName": "octicon mark-github",
+  "categories": ["Python"],
+  "filePatterns": ["^uv\\.lock$", "^pyproject\\.toml$"]
+}
