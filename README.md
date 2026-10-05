@@ -79,8 +79,10 @@ newer commit, in a pull request of its own.
 
   A chapter whose source is missing (a 404 or 410, or markup without the parts it needs) is dropped, and the others
   share its time. Any other failure exits non-zero and changes nothing.
-- `.github/workflows/profile.yml` runs the generator daily, on the `humanfia-ai-deployed` `repository_dispatch`
-  that humanfia.ai's deploy sends, and by hand. It commits only when an SVG changed.
+- `.github/workflows/profile.yml` checks every half hour whether humanfia.ai has deployed a commit the profile was
+  not built from (`profile/.source-sha`), reading the site's public `deploy` runs with its own token, and runs the
+  generator only if so. It also runs the generator daily, by hand, and on a `humanfia-ai-deployed`
+  `repository_dispatch`. It commits only when an SVG or `profile/.source-sha` changed.
 
 ### Usage
 
@@ -91,9 +93,8 @@ SITE=http://localhost:4173 DOCS=http://localhost:5173/humanize python3 tools/gen
 python3 -m unittest discover -s tools -p 'test_*.py'
 ```
 
-The dispatch from humanfia.ai needs a fine-grained token with **Contents: read and write** on `humanfia/.github`.
-Store it as the `ORG_PROFILE_TOKEN` secret in `humanfia/humanfia.ai`. Without it, the daily run still keeps the
-profile current, at most a day late.
+No secret is needed anywhere: the profile catches up with a deploy of humanfia.ai within about 40 minutes (the
+half-hourly check, after the ten minutes it gives GitHub Pages to serve the deploy).
 
 The `banner` workflow runs the generator's tests on every change to it.
 

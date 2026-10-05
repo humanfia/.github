@@ -1,13 +1,18 @@
 # The org profile is generated from humanfia.ai, so it is rebuilt whenever the site may have
-# changed: after every deploy of humanfia.ai (which sends a `humanfia-ai-deployed` dispatch),
-# once a day in case a dispatch went missing, and by hand. A run that changes nothing commits
-# nothing.
+# changed. Every half hour this looks up the commit humanfia.ai last deployed -- public data,
+# read with this workflow's own token, so humanfia.ai needs no secret to tell us -- and stops
+# there if it is the one `profile/.source-sha` says the profile was last built from. Once a
+# day, by hand, and on a `humanfia-ai-deployed` dispatch it rebuilds regardless. A run that
+# changes nothing commits nothing.
 
 name: profile
 
 on:
   schedule:
+    # The daily rebuild: the docs site and the feeds' dates move without a deploy of humanfia.ai.
     - cron: "17 5 * * *"
+    # The deploy watch.
+    - cron: "7,37 * * * *"
   repository_dispatch:
     types: [humanfia-ai-deployed]
   workflow_dispatch:
@@ -33,23 +38,53 @@ jobs:
           ref: ${{ github.ref_name }}
           persist-credentials: false
 
+      # The newest successful deploy that finished at least ten minutes ago: GitHub Pages can
+      # take that long to serve what it was given, and a deploy read too early would be
+      # recorded as built while the profile still showed the site before it. The next watch
+      # picks it up instead.
+      - name: Has humanfia.ai deployed since the profile was built?
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+        run: |
+          sha=$(gh api "repos/humanfia/humanfia.ai/actions/workflows/deploy.yml/runs?branch=main&event=push&status=success&per_page=10" \
+            --jq '[.workflow_runs[] | select(.updated_at < (now - 600 | todate))][0].head_sha // ""')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          built=$(cat profile/.source-sha 2>/dev/null || true)
+          if [ "$EVENT" = schedule ] && [ "$CRON" != "17 5 * * *" ] && { [ -z "$sha" ] || [ "$sha" = "$built" ]; }; then
+            echo "The profile is built from humanfia.ai@${built:-?}, its latest deploy; nothing to do."
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "humanfia.ai@${sha:-?} deployed; the profile is built from ${built:-nothing recorded}."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Test the generator
+        if: steps.source.outputs.stale == 'true'
         run: python3 -m unittest discover -s tools -p 'test_*.py'
 
       # Exits non-zero, leaving the profile as it is, if a page fails other than with a 404 or 410.
       - name: Generate the banners from humanfia.ai
+        if: steps.source.outputs.stale == 'true'
         run: python3 tools/gen_portfolio.py
 
       - name: Commit if anything changed
+        if: steps.source.outputs.stale == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.source.outputs.sha }}
         run: |
-          git add profile/humanfia-portfolio-light.svg profile/humanfia-portfolio-dark.svg
+          if [ -n "$SHA" ]; then
+            echo "$SHA" > profile/.source-sha
+          fi
+          git add profile/
           if git diff --cached --quiet; then
             echo "The profile already matches humanfia.ai."
             exit 0
           fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "chore(profile): regenerate from humanfia.ai"
+              commit -m "chore(profile): regenerate from humanfia.ai${SHA:+@${SHA:0:7}}"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
