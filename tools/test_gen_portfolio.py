@@ -3,7 +3,9 @@
     python3 -m unittest discover -s tools -p 'test_*.py'
 """
 
+import io
 import unittest
+import urllib.error
 from unittest import mock
 from xml.etree import ElementTree as ET
 
@@ -84,11 +86,45 @@ class Logo(unittest.TestCase):
         self.assertIsNone(logo.dot)
         self.assertIn('id="logo-p"', logo.body)
 
+    def test_editor_namespaces_are_dropped_and_xlink_kept(self) -> None:
+        src = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+               'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" viewBox="0 0 10 10">'
+               '<defs><path id="p" d="M0 0h1z"/></defs><use xlink:href="#p" inkscape:label="x"/>'
+               '<inkscape:thing/></svg>')
+        logo = g.parse_logo(src)
+        self.assertNotIn("inkscape", logo.body)
+        self.assertIn('xlink:href="#logo-p"', logo.body)
+        ET.fromstring(g.banner("light", logo, "", [], [], []))
+
+    def test_posts_stop_before_the_wedge(self) -> None:
+        long = "A rather long headline that wraps onto a second line in the latest column"
+        posts = [g.Post("NEWS", f"{long} {i}", f"https://x/{i}", 0, "Oct 2, 2026") for i in range(8)]
+        svg = g.banner("light", g.parse_logo(LOGO), "t", [], [], posts)
+        self.assertIn("A rather", svg)
+        self.assertLess(svg.count("NEWS · "), 8)
+
     def test_banner_is_well_formed_svg(self) -> None:
         posts = [g.Post("NEWS", "Title & <more>", "https://x", 0, "Oct 2, 2026")]
         svg = g.banner("dark", g.parse_logo(LOGO), "we build", [g.Item("KDA", "Kernels", "")],
                        [g.Item("AoT", "", "")], posts)
         ET.fromstring(svg)
+
+
+class Fetch(unittest.TestCase):
+    def _http(self, code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO())  # type: ignore[arg-type]
+
+    def test_only_404_and_410_mean_absent(self) -> None:
+        for code in (404, 410):
+            with mock.patch("urllib.request.urlopen", side_effect=self._http(code)):
+                self.assertIsNone(g.fetch("/news/feed.rss"))
+
+    def test_other_failures_stop_the_run_after_retrying(self) -> None:
+        for err in (self._http(403), self._http(429), self._http(503), TimeoutError(), ConnectionResetError()):
+            with mock.patch("urllib.request.urlopen", side_effect=err) as urlopen, \
+                    mock.patch("time.sleep"), self.assertRaises(SystemExit):
+                g.fetch("/")
+            self.assertEqual(urlopen.call_count, 3)
 
 
 class Feed(unittest.TestCase):
@@ -107,6 +143,11 @@ class Readme(unittest.TestCase):
         self.assertTrue(new.startswith("intro\n") and new.endswith("\noutro\n"))
         self.assertNotIn("stale", new)
         self.assertIn('<a href="https://humanfia.ai/blog/">Blog</a>', new)
+
+    def test_a_readme_without_markers_is_left_alone(self) -> None:
+        with self.assertRaises(SystemExit):
+            g.readme("hand-written profile\n", "alt", [])
+        self.assertIn(g.BEGIN, g.readme("", "alt", []))
 
 
 if __name__ == "__main__":

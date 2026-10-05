@@ -20,6 +20,7 @@ text is set in system fonts.
 from __future__ import annotations
 
 import html
+import http.client
 import math
 import os
 import re
@@ -37,8 +38,9 @@ SITE = os.environ.get("SITE", "https://humanfia.ai").rstrip("/")
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = ROOT / "profile"
 SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
 ET.register_namespace("", SVG_NS)
-ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+ET.register_namespace("xlink", XLINK_NS)
 
 # Fixed homes that are not pages of the site.
 DOCS = "https://docs.humanfia.ai/humanize/"
@@ -59,21 +61,31 @@ SLOPE = math.tan(math.radians(17))  # the one diagonal everything leans on
 
 # ------------------------------------------------------------------------------------ fetching
 
+GONE = (404, 410)  # the only answers that mean "this section does not exist"
+
+
 def fetch(path: str) -> str | None:
-    """The body at SITE+path, or None if the site says it is not there (a section not shipped yet)."""
+    """The body at SITE+path, or None if the site says it is not there (404/410: not shipped yet).
+
+    Anything else -- 403, 429, 5xx, a timeout, a dropped connection, a body that is not UTF-8 -- is
+    retried and then stops the run, so a flaky fetch can never quietly drop a section from the profile.
+    """
     url = path if path.startswith("http") else SITE + path
     req = urllib.request.Request(url, headers={"User-Agent": "humanfia-org-profile"})
+    why = ""
     for attempt in range(3):
+        if attempt:
+            time.sleep(2 * attempt)
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 return r.read().decode("utf-8")
         except urllib.error.HTTPError as e:
-            if e.code < 500:
+            if e.code in GONE:
                 return None
-        except (urllib.error.URLError, TimeoutError):
-            pass
-        time.sleep(2 * (attempt + 1))
-    return None
+            why = f"HTTP {e.code}"
+        except (OSError, http.client.HTTPException, UnicodeDecodeError) as e:  # URLError, timeouts, resets
+            why = f"{type(e).__name__}: {e}"
+    sys.exit(f"gen_portfolio: could not read {url} ({why}); leaving the profile as it is")
 
 
 def need(path: str) -> str:
@@ -304,10 +316,17 @@ def _local(tag: str) -> str:
 
 def parse_logo(svg: str) -> Logo:
     root = ET.fromstring(svg)
+    # Keep only SVG elements and plain or xlink attributes: editor namespaces (inkscape:, sodipodi:)
+    # would otherwise come out under prefixes the banner never declares.
+    ours = ("{" + SVG_NS + "}", "{" + XLINK_NS + "}")
+    for el in root.iter():
+        for k in [k for k in el.attrib if k.startswith("{") and not k.startswith(ours)]:
+            del el.attrib[k]
     vb = tuple(float(x) for x in re.split(r"[\s,]+", root.get("viewBox", "0 0 51 57").strip()))
     parents = {c: p for p in root.iter() for c in p}
     for el in list(root.iter()):
-        if _local(el.tag) in ("title", "desc", "script", "metadata"):
+        foreign = el.tag.startswith("{") and not el.tag.startswith("{" + SVG_NS + "}")
+        if el in parents and (foreign or _local(el.tag) in ("title", "desc", "script", "metadata")):
             parents[el].remove(el)
     circles = [el for el in root.iter() if _local(el.tag) == "circle"]
     named = [el for el in root.iter() if "dot" in f"{el.get('id', '')} {el.get('class', '')}".lower()]
@@ -461,6 +480,14 @@ def banner(theme: str, logo: Logo, tagline: str, proj: list[Item], flow: list[It
         xs.append((x, wgt * unit))
         x += wgt * unit + (gap if wgt else 0)
 
+    # The red wedge in the bottom-right corner rises along the diagonal; text must stay left of it.
+    rise = 100
+    run = rise / SLOPE
+
+    def clear(x: float, baseline: float) -> float:
+        """Room from x to the wedge's edge at a line whose baseline is at `baseline` (with a margin)."""
+        return (W - run) + (H - baseline - 8) / SLOPE - 16 - x
+
     blocks, k = [], 0
     if proj:
         cx, cw = xs[0]
@@ -488,13 +515,23 @@ def banner(theme: str, logo: Logo, tagline: str, proj: list[Item], flow: list[It
         cx, cw = xs[2]
         top = 150 - k * 22
         rows, y = [], top + 40
-        for j, p in enumerate(posts):
-            lines = wrap(p.title, 17, cw, 2, True)
+        shown: list[tuple[Post, list[str]]] = []
+        for p in posts:
+            # Wrap against the room left of the wedge at the lower (narrower) title line; stop listing
+            # posts once that room is too small to read.
+            room = min(cw, clear(cx, y + 41))
+            if room < 160:
+                break
+            lines = wrap(p.title, 17, room, 2, True)
+            shown.append((p, lines))
+            y += 21 + 20 * len(lines) + 10
+        y = top + 40
+        for j, (p, lines) in enumerate(shown):
             rows.append(text(cx, y, f"{p.kind} · {p.date.upper()}", "meta")
                         + "".join(text(cx, y + 21 + 20 * i, ln, "t") for i, ln in enumerate(lines)))
             span = 21 + 20 * len(lines) + 10
             # A red bar marks one post at a time, walking down the list over the loop.
-            on, off = j / len(posts), (j + 1) / len(posts)
+            on, off = j / len(shown), (j + 1) / len(shown)
             rows.append(f'<rect x="{n(cx - 14)}" y="{n(y - 10)}" width="4" height="{n(span - 12)}" class="red" opacity="0">'
                         f'<animate attributeName="opacity" dur="{n(T)}s" repeatCount="indefinite" calcMode="discrete" '
                         f'values="0;1;0" keyTimes="0;{n(on)};{n(off)}"/></rect>')
@@ -503,8 +540,6 @@ def banner(theme: str, logo: Logo, tagline: str, proj: list[Item], flow: list[It
 
     # Constructivist ground: a red wedge cutting in from the bottom-right on the diagonal, carrying the
     # address; an ink bar the H stands against; a hairline under the mark.
-    rise = 100
-    run = rise / SLOPE
     angle = -math.degrees(math.atan(SLOPE))
     url_x = W - 24  # the address runs parallel to the hypotenuse, just inside it
     url_y = H - (url_x - (W - run)) * SLOPE + 24
@@ -526,7 +561,7 @@ def banner(theme: str, logo: Logo, tagline: str, proj: list[Item], flow: list[It
            f".big{{font-size:96px;font-weight:800;letter-spacing:-.04em}}")
     title = f"Humanfia — {tagline}" if tagline else "Humanfia"
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
+        f'<svg xmlns="{SVG_NS}" xmlns:xlink="{XLINK_NS}" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
         f'aria-labelledby="t"><title id="t">{esc(title)}</title><style>{css}</style>'
         f'<rect width="{W}" height="{H}" class="bg"/>{ground}'
         f'<svg x="{n(lx)}" y="{n(ly)}" width="{n(lw)}" height="{n(lh)}" viewBox="{" ".join(n(v) for v in logo.viewbox)}" '
@@ -574,10 +609,13 @@ def readme(old: str, alt: str, nav_links: list[tuple[str, str]]) -> str:
   {joined}
 </p>
 {END}"""
-    if BEGIN in old and END in old:
-        head, rest = old.split(BEGIN, 1)
-        return head + block + rest.split(END, 1)[1]
-    return block + "\n"
+    if not old.strip():
+        return block + "\n"
+    if old.count(BEGIN) != 1 or old.count(END) != 1 or old.index(BEGIN) > old.index(END):
+        sys.exit(f"gen_portfolio: profile/README.md lacks one {BEGIN} ... {END} block; "
+                 "refusing to overwrite it")
+    head, rest = old.split(BEGIN, 1)
+    return head + block + rest.split(END, 1)[1]
 
 
 # ----------------------------------------------------------------------------------------- main
@@ -600,7 +638,7 @@ def main() -> None:
 
     if not os.environ.get("THEME"):
         names = ", ".join(p.title for p in proj)
-        alt = f"Humanfia — {tagline}." + (f" {names}." if names else "")
+        alt = (f"Humanfia — {tagline}." if tagline else "Humanfia.") + (f" {names}." if names else "")
         path = PROFILE / "README.md"
         path.write_text(readme(path.read_text(encoding="utf-8") if path.exists() else "", alt, links(nav, flows_url)),
                         encoding="utf-8")
