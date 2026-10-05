@@ -1,0 +1,17 @@
+# What CI pins, kept fresh: the actions the workflows here use, the shared one included. Monthly
+# and grouped, and a week behind, as in humanfia/humanize.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

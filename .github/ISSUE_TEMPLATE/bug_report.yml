@@ -1,0 +1,55 @@
+name: Bug Report
+description: Something does not work.
+title: "[Bug]: "
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Search this repository's existing issues
+        first, in case it is already known.
+
+        **A vulnerability does not go here.** Report it privately, as
+        [SECURITY.md](https://github.com/humanfia/.github/blob/main/SECURITY.md) says.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to make it happen
+      description: The commands you ran or what you did, step by step.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release, or the commit of `main` you ran (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: What operating systems are you seeing the problem on?
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows (WSL)
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Paste any relevant output. It is formatted as code, so no backticks are needed. Remove
+        API keys, tokens and anything else private first.
+      render: shell
