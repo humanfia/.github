@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
-"""Generate the Humanfia org profile from humanfia.ai: a constructivist poster wall you can click.
+"""Generate the Humanfia org profile banner from humanfia.ai: a constructivist film, in one shot.
 
 Nothing about Humanfia is written down here. Every run reads the live sites and lays out what it
-finds, as one README of many small posters, each a link:
+finds as chapters -- boards hung along the logo's one diagonal in one constructivist world:
 
     the mark        /logo.svg, extruded into a slab that turns in space, its red ball orbiting it
     the projects    the nav's Projects menu: a turning solid, the name and its line, per project
     the runtime     the Humanize docs' "how it fits together" bands, as a tower a turn falls through,
                     and the home page's features, each with a working diagram
-    the flows       the /flows/ catalogue: one card per flow, its pattern acted out
-    the results     the home page's tiles: counters that spin into place, each linked to its post
-    the latest      /news/feed.rss and /blog/feed.rss, one strip per post
-    the people      About's roster as coins that flip, its principles on a turning prism
-    the address     About's contacts
+    the flows       the /flows/ catalogue: one card per flow, its loop acted out
+    the results     the home page's tiles: counters that spin into place
+    the latest      /news/feed.rss and /blog/feed.rss
+    the people      About's roster as coins that flip in a wave, its principles on a turning prism
+    the address     the site, and About's contacts
 
-A section whose source the site does not have (a 404 or 410, or markup without the parts it needs)
+A camera holds on each board, pans across the wide and tall ones, and pulls back between them, so
+the world shows -- red rails, wedges, discs, bars, each chapter's name in block capitals up the
+diagonal -- while the red ball rolls along the rail to the next board. At the end of the loop
+(well over two minutes) it pulls right back over the whole world and dives into the first board.
+
+A chapter whose source the site does not have (a 404 or 410, or markup without the parts it needs)
 is left out. Any other failure -- a 403, a 5xx, a timeout -- stops the run, so a bad fetch never
 overwrites a good profile.
 
-GitHub shows README images through <img>: no JavaScript, no hover, no web fonts, nothing loaded.
-So the interaction is the README's own -- every poster is a link, and the long sections fold into
-<details> -- and the motion is SMIL and CSS keyframes, played back from geometry this script
-rotates and projects itself (tools/proun.py). Each poster comes in a light and a dark version.
+GitHub shows README images through <img>: no JavaScript, no web fonts, nothing loaded. So the 3D
+is rotated and projected here (tools/proun.py) and only played back by the browser, with SMIL and
+CSS keyframes; type is the system's heaviest sans, and avatars are inlined.
 
-    python3 tools/gen_portfolio.py              # both themes
-    THEME=dark python3 tools/gen_portfolio.py   # one theme (light|dark)
+    python3 tools/gen_portfolio.py              # both banners
+    THEME=dark python3 tools/gen_portfolio.py   # one banner (light|dark)
     SITE=http://localhost:4173 DOCS=http://localhost:5173/humanize python3 tools/gen_portfolio.py
 """
 
@@ -56,7 +60,7 @@ SITE = os.environ.get("SITE", "https://humanfia.ai").rstrip("/")
 DOCS = os.environ.get("DOCS", "https://docs.humanfia.ai/humanize").rstrip("/")
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = ROOT / "profile"
-ART = "art"  # profile/art/<theme>/<poster>.svg
+ART = "art"  # where the poster wall this replaced lived; removed on sight
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 ET.register_namespace("", SVG_NS)
@@ -1346,106 +1350,308 @@ def outro(theme: str, f: Facts) -> str:
     return sh.render("".join(out))
 
 
-# ---------------------------------------------------------------------------------- the profile
+
+# ------------------------------------------------------------------------------------- the film
+
+VW, VH = 1000.0, 560.0     # the frame; shown ~830 px wide on GitHub
+GAP, CLIMB = 560.0, 320.0  # between one chapter's board and the next: along, and up the diagonal
+MOVE, REVEAL = 2.6, 6.0    # seconds: the camera's move between chapters, and the pull-back at the end
+
+
+def _rules(css: str) -> list[str]:
+    """Top-level CSS rules, @keyframes kept whole."""
+    out, depth, start = [], 0, 0
+    for i, ch in enumerate(css):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                out.append(css[start:i + 1].strip())
+                start = i + 1
+    return out
+
+
+def scope(doc: str, pfx: str) -> tuple[list[str], str, float, float]:
+    """A poster made ready to share a document with others: its ids and keyframes prefixed, its
+    title and grain dropped. Returns (css rules, content, width, height)."""
+    m = re.match(r'<svg [^>]*viewBox="0 0 ([\d.]+) ([\d.]+)"[^>]*>(.*)</svg>\s*$', doc, re.S)
+    assert m, "not a poster"
+    w, h, inner = float(m.group(1)), float(m.group(2)), m.group(3)
+    style = re.search(r"<style>(.*?)</style>", inner, re.S)
+    css = style.group(1) if style else ""
+    inner = re.sub(r"<style>.*?</style>|<title[^>]*>.*?</title>", "", inner, flags=re.S)
+    inner = re.sub(r'<rect [^>]*filter="url\(#grain\)"[^>]*/>', "", inner)  # grain under a moving camera would repaint every frame
+    for i in set(re.findall(r'\bid="([^"]+)"', inner)):
+        inner = re.sub(rf'(id="|url\(#|href="#){re.escape(i)}(?=["\)])', rf"\g<1>{pfx}{i}", inner)
+    frames = set(re.findall(r"@keyframes ([\w-]+)", css))
+    for k in frames:
+        css = re.sub(rf"(?<![\w-]){re.escape(k)}(?![\w-])", pfx + k, css)
+    if frames:
+        inner = re.sub(r'class="([^"]*)"', lambda c: 'class="' + " ".join(pfx + x if x in frames else x for x in c.group(1).split()) + '"', inner)
+    return _rules(css), inner, w, h
+
 
 @dataclass
-class Poster:
-    name: str          # profile/art/<theme>/<name>.svg
-    alt: str
-    draw: Callable[[str], str]
+class Board:
+    """One chapter's board in the world: posters laid out on it, and how long the camera stays."""
+    title: str
+    w: float
+    h: float
+    hold: float
+    parts: list[tuple[str, float, float, float]] = field(default_factory=list)  # (poster, x, y, scale)
 
 
-def picture(p: Poster, width_: str = "100%", href: str = "") -> str:
-    """A poster as GitHub shows it: the light or dark version by the viewer's theme, as a link."""
-    pic = (f'<picture><source media="(prefers-color-scheme: dark)" srcset="./{ART}/dark/{p.name}.svg">'
-           f'<source media="(prefers-color-scheme: light)" srcset="./{ART}/light/{p.name}.svg">'
-           f'<img src="./{ART}/light/{p.name}.svg" width="{width_}" alt="{esc(p.alt)}"></picture>')
-    return f'<a href="{esc(href)}">{pic}</a>' if href else pic
-
-
-def rows(cards: list[tuple[Poster, str]], per: int, gap: float = 0.6) -> str:
-    """Cards in rows of `per`, each a link; no whitespace between them, so they sit edge to edge."""
-    w = f"{(100 - gap * per) / per:.1f}%"
-    lines = []
-    for k in range(0, len(cards), per):
-        lines.append("".join(picture(p, w, href) for p, href in cards[k:k + per]))
-    return "<br>\n".join(lines)
-
-
-def build(f: Facts) -> tuple[list[Poster], str]:
-    """Every poster, and the README that places them."""
-    posters: list[Poster] = []
-
-    def add(name: str, alt: str, draw: Callable[[str], str]) -> Poster:
-        p = Poster(name, alt, draw)
-        posters.append(p)
-        return p
-
-    md = []
+def boards(theme: str, f: Facts) -> list[Board]:
+    """The storyboard: a chapter is on the wall only if the site gave it something to say."""
+    out = [Board("Humanfia", VW, VH, 18, [(hero(theme, f), 0, 20, 1)])]
     num = 0
 
-    def section(title: str, note: str) -> str:
+    def head(title: str, note: str) -> tuple[str, float, float, float]:
         nonlocal num
         num += 1
-        p = add(f"head-{num}", f"{num:02d} · {title}", lambda t, k=num, a=title, b=note: header(t, k, a, b))
-        return f'<p>{picture(p)}</p>'
-
-    lead = f.headline or "Humanfia"
-    md.append(f'<p align="center">{picture(add("hero", f"Humanfia: {lead} {f.lead}".strip(), lambda t: hero(t, f)), href=SITE)}</p>')
+        return (header(theme, num, title, note), 0, 0, 1)
 
     if f.projects:
-        md.append(section("Projects", "Every project is open. Click one."))
-        cards = [(add(f"project-{i}", f"{p.name}: {p.sub or p.lede}", lambda t, p=p, i=i: project_tile(t, p, i)), p.href)
-                 for i, p in enumerate(f.projects[:6])]
-        md.append(f'<p align="center">{rows(cards, len(cards))}</p>')
-
+        ps = f.projects[:6]
+        s = min(0.72, (VW - 8 * (len(ps) - 1)) / (300 * len(ps)))
+        x0 = (VW - len(ps) * 300 * s - 8 * (len(ps) - 1)) / 2
+        b = Board("Projects", VW, VH, 14, [head("Projects", "Five, all open.")])
+        b.parts += [(project_tile(theme, p, i), x0 + i * (300 * s + 8), 120, s) for i, p in enumerate(ps)]
+        out.append(b)
     if f.bands:
-        md.append(section("The runtime", "Humanize: every turn, one clock. Unfold it."))
-        inner = [f'<p>{picture(add("runtime", "Humanize, how it fits together: " + "; ".join(f"{b.title}, {b.about}" for b in f.bands[:4]), lambda t: runtime(t, f)), href=DOCS + "/")}</p>']
+        b = Board("Runtime", VW, 0, 22, [head("The runtime", "Humanize: every turn, one clock.")])
+        rt = runtime(theme, f)
+        rh = float(re.search(r'viewBox="0 0 [\d.]+ ([\d.]+)"', rt).group(1))
+        b.parts.append((rt, 0, 100, 1))
+        b.h = 100 + rh
         if f.features:
-            inner.append(f'<p>{picture(add("features", "; ".join(f"{h}: {p}" for h, p in f.features[:3]), lambda t: features(t, f)), href=DOCS + "/")}</p>')
-        md.append("<details open>\n<summary><b>Humanize, how it fits together</b> — a turn falls through the stack</summary>\n\n"
-                  + "\n".join(inner) + "\n\n</details>")
-
+            b.parts.append((features(theme, f), 0, b.h + 20, 1))
+            b.h += 350
+        b.h = max(b.h, VH)
+        out.append(b)
     if f.flows:
-        md.append(section("Flows", f"{len(f.flows)} loops around the agents. Unfold, then pick one."))
-        cards = [(add(f"flow-{i}", f"{fl.name} ({fl.tag}): {fl.blurb}", lambda t, fl=fl, i=i: flow_tile(t, fl, i)), fl.href)
-                 for i, fl in enumerate(f.flows)]
-        kinds = list(dict.fromkeys(fl.tag for fl in f.flows if fl.tag))
-        md.append(f"<details>\n<summary><b>The flows</b> — {esc(', '.join(k.lower() for k in kinds[:6]))}</summary>\n\n"
-                  f'<p align="center">{rows(cards, 3)}</p>\n\n</details>')
-
+        cols = math.ceil(len(f.flows) / 2)
+        s = 0.85
+        b = Board("Flows", max(VW, cols * (340 * s + 8) - 8), VH, 6 + 1.6 * cols, [head("Flows", f"{len(f.flows)} loops around the agents.")])
+        b.parts += [(flow_tile(theme, fl, i), (i // 2) * (340 * s + 8), 108 + (i % 2) * (250 * s + 8), s) for i, fl in enumerate(f.flows)]
+        out.append(b)
     if f.results:
-        md.append(section("Results", "Measured where somebody else keeps the score."))
-        cards = [(add(f"result-{i}", f"{r.label}: {r.num}. {r.body}", lambda t, r=r, i=i: result_tile(t, r, i)), r.href or SITE)
-                 for i, r in enumerate(f.results[:12])]
-        md.append(f'<p align="center">{rows(cards, 4)}</p>')
-
+        rs = f.results[:12]
+        cols = math.ceil(len(rs) / 2)
+        s = 0.94
+        b = Board("Results", max(VW, cols * (300 * s + 8) - 8), VH, 6 + 1.6 * cols, [head("Results", "Measured where somebody else keeps the score.")])
+        b.parts += [(result_tile(theme, r, i), (i // 2) * (300 * s + 8), 106 + (i % 2) * (230 * s + 8), s) for i, r in enumerate(rs)]
+        out.append(b)
     if f.posts:
-        md.append(section("Latest", "News and the blog, newest first."))
-        strips = [picture(add(f"post-{i}", f"{p.kind} · {p.date} · {p.title}", lambda t, p=p, i=i: post_strip(t, p, i)), href=p.href)
-                  for i, p in enumerate(f.posts)]
-        md.append("<p>" + "<br>\n".join(strips) + "</p>")
-
+        b = Board("Latest", VW, VH, 12, [head("Latest", "News and the blog, newest first.")])
+        b.parts += [(post_strip(theme, p, i), 0, 100 + 92 * i, 1) for i, p in enumerate(f.posts[:5])]
+        out.append(b)
     if f.people or f.principles:
-        md.append(section("The people", fit(sentences(f.people_intro)[-1] if f.people_intro else "Who builds it.", 16, 600)))
+        intro = sentences(f.people_intro)[-1] if f.people_intro else "Who builds it."
+        b = Board("People", VW, VH, 18, [head("The people", fit(intro, 16, 600))])
+        y = 100.0
         if f.people:
-            cards = [(add(f"person-{i}", f"{p.name} (@{p.handle})", lambda t, p=p, i=i: person_coin(t, p, i)), f"https://github.com/{p.handle}")
-                     for i, p in enumerate(f.people)]
-            md.append(f'<p align="center">{rows(cards, 6 if len(cards) > 9 else len(cards))}</p>')
+            cols = math.ceil(len(f.people) / 2) if len(f.people) > 8 else len(f.people)
+            s = min(0.8, VW / (cols * 180))
+            x0 = (VW - cols * 180 * s) / 2
+            b.parts += [(person_coin(theme, p, i), x0 + (i % cols) * 180 * s, y + (i // cols) * 214 * s, s) for i, p in enumerate(f.people)]
+            y += math.ceil(len(f.people) / cols) * 214 * s + 10
         if f.principles:
-            md.append(f'<p>{picture(add("principles", "How we work: " + " ".join(f.principles), lambda t: principles(t, f)), href=absolute(f.people_href))}</p>')
+            b.parts.append((principles(theme, f), 0, y, 1))
+            y += 190
+        b.h = max(VH, y)
+        out.append(b)
+    end = Board("Address", VW, VH, 10, [(outro(theme, f), 0, 40, 1)])
+    cs = f.contact[:3]
+    if cs:
+        s = (VW - 8 * (len(cs) - 1)) / (330 * len(cs))
+        end.parts += [(contact_tile(theme, w, h, i), i * (330 * s + 8), 300, s) for i, (w, h) in enumerate(cs)]
+    out.append(end)
+    return out
 
-    tail = [f'<p>{picture(add("outro", SITE.split("//", 1)[-1], lambda t: outro(t, f)), href=SITE)}</p>']
-    if f.contact:
-        cards = [(add(f"contact-{i}", f"{what}: {href}", lambda t, w=what, h=href, i=i: contact_tile(t, w, h, i)), href)
-                 for i, (what, href) in enumerate(f.contact[:3])]
-        tail.append(f'<p align="center">{rows(cards, len(cards))}</p>')
-    md.extend(tail)
 
-    readme = ("<!-- Generated from humanfia.ai by tools/gen_portfolio.py; edits here are overwritten. -->\n\n"
-              + "\n\n".join(md) + "\n")
-    return posters, readme
+def film(theme: str, f: Facts) -> str:
+    """The whole profile as one shot. The chapters are boards hung along the logo's diagonal in one
+    constructivist world; a camera holds on each, pans across the wide and tall ones, and pulls back
+    between them -- so you see where you have been and where you are going -- while the red ball
+    rolls along the rail from board to board. At the end it pulls right back to show the whole
+    world, then dives into the first board again."""
+    c = THEMES[theme]
+    sh = Sheet(theme, VW, VH, "Humanfia" + (f" — {f.headline}" if f.headline else ""))
+    bs = boards(theme, f)
+    at, x, y = [], 0.0, 0.0
+    for b in bs:
+        at.append((x, y - b.h / 2))
+        x += b.w + GAP
+        y -= CLIMB
+    world_w = x - GAP
+    tops = [a[1] for a in at]
+    bottoms = [a[1] + b.h for a, b in zip(at, bs)]
+
+    # The camera: (time, centre x, centre y, scale) keys.
+    def first(k: int) -> tuple[float, float]:
+        (bx, by), b = at[k], bs[k]
+        return bx + min(VW, b.w) / 2, by + min(VH, b.h) / 2
+
+    def last(k: int) -> tuple[float, float]:
+        (bx, by), b = at[k], bs[k]
+        return bx + b.w - min(VW, b.w) / 2, by + b.h - min(VH, b.h) / 2
+
+    keys: list[tuple[float, float, float, float]] = []
+    windows: list[tuple[float, float]] = []      # when each board is on screen at all
+    rail: list[tuple[float, float, float, float]] = []  # (t, x, y, shown) for the ball between boards
+    t = 0.0
+    overview = min(VW / (world_w + 600), VH / (max(bottoms) - min(tops) + 600))
+    mid = (world_w / 2, (max(bottoms) + min(tops)) / 2)
+    for k, b in enumerate(bs):
+        a, z = first(k), last(k)
+        n_ = 10
+        for i in range(n_):
+            e = P.ease(i / (n_ - 1))
+            keys.append((t + b.hold * i / (n_ - 1) * 0.999, a[0] + (z[0] - a[0]) * e, a[1] + (z[1] - a[1]) * e, 1.0))
+        windows.append((t - MOVE if k else 0.0, t + b.hold + (MOVE if k + 1 < len(bs) else REVEAL)))
+        t += b.hold
+        if k + 1 < len(bs):
+            nxt = first(k + 1)
+            ex = (at[k][0] + b.w, at[k][1] + b.h / 2)
+            en = (at[k + 1][0], at[k + 1][1] + bs[k + 1].h / 2)
+            for i in range(1, 17):
+                u = i / 16
+                e = P.ease(u)
+                keys.append((t + MOVE * u, z[0] + (nxt[0] - z[0]) * e, z[1] + (nxt[1] - z[1]) * e, 1 - 0.56 * math.sin(math.pi * u)))
+            for i in range(17):
+                u = i / 16
+                rail.append((t + MOVE * u, ex[0] + (en[0] - ex[0]) * u, ex[1] + (en[1] - ex[1]) * u - 160 * math.sin(math.pi * u), 1.0))
+            t += MOVE
+        else:  # the reveal: out to the whole world, and back into the first board
+            home = first(0)
+            for i in range(1, 25):
+                u = i / 24
+                if u <= 0.5:
+                    e = P.ease(u * 2)
+                    cx, cy = z[0] + (mid[0] - z[0]) * e, z[1] + (mid[1] - z[1]) * e
+                    s = math.exp(math.log(overview) * e)
+                else:
+                    e = P.ease(u * 2 - 1)
+                    cx, cy = mid[0] + (home[0] - mid[0]) * e, mid[1] + (home[1] - mid[1]) * e
+                    s = math.exp(math.log(overview) * (1 - e))
+                keys.append((t + REVEAL * u, cx, cy, s))
+            t += REVEAL
+    T = t
+    windows[0] = (0.0, windows[0][1])
+    reveal = (T - REVEAL, T)
+
+    def kt(ts: list[float]) -> str:
+        return ";".join(f"{v / T:.5f}".rstrip("0").rstrip(".") or "0" for v in ts)
+
+    ts = [k[0] for k in keys]
+    if ts[0] > 0:
+        keys.insert(0, (0.0, *keys[0][1:]))
+    keys[-1] = (T, *keys[-1][1:])
+    ts = [k[0] for k in keys]
+    cam_s = (f'<animateTransform attributeName="transform" type="scale" dur="{n(T)}s" repeatCount="indefinite" '
+             f'values="{";".join(n(k[3]) if k[3] > 0.2 else f"{k[3]:.4f}" for k in keys)}" keyTimes="{kt(ts)}"/>')
+    cam_t = (f'<animateTransform attributeName="transform" type="translate" dur="{n(T)}s" repeatCount="indefinite" '
+             f'values="{";".join(f"{n(-k[1])} {n(-k[2])}" for k in keys)}" keyTimes="{kt(ts)}"/>')
+
+    # The world between the boards: a constructivist poster of its own, seen only when the camera
+    # pulls back -- the red rail and its ink shadow, wedges, a disc, bars, and each chapter's name
+    # in block capitals running up the diagonal.
+    world = []
+    for k in range(len(bs) - 1):
+        (ax, ay), (bx, by) = at[k], at[k + 1]
+        ex, ey = ax + bs[k].w, ay + bs[k].h / 2
+        nx, ny = bx, by + bs[k + 1].h / 2
+        gx = (ex + nx) / 2
+        world.append(f'<line x1="{n(ex - 60)}" y1="{n(ey + 30)}" x2="{n(nx + 60)}" y2="{n(ny + 30)}" stroke="{c["ink"]}" stroke-width="10"/>'
+                     f'<line x1="{n(ex - 60)}" y1="{n(ey)}" x2="{n(nx + 60)}" y2="{n(ny)}" stroke="{c["red"]}" stroke-width="22"/>')
+        if k % 3 == 0:
+            world.append(f'<circle cx="{n(gx)}" cy="{n((ey + ny) / 2 - 420)}" r="230" class="red"/>')
+        elif k % 3 == 1:
+            world.append(f'<polygon points="{n(ex + 40)},{n(ey + 560)} {n(nx - 20)},{n(ny - 260)} {n(nx - 20)},{n(ny + 560)}" class="red"/>')
+        else:
+            world.append(f'<rect x="{n(gx - 300)}" y="{n((ey + ny) / 2 + 220)}" width="600" height="70" class="ink" '
+                         f'transform="rotate({n(-ANGLE)} {n(gx)} {n((ey + ny) / 2 + 255)})"/>')
+        world.append(f'<rect x="{n(gx - 18)}" y="{n(min(ay, by) - 900)}" width="36" height="{n(abs(ay - by) + 2400)}" class="ink" '
+                     f'transform="rotate({n(ANGLE)} {n(gx)} {n((ey + ny) / 2)})" opacity=".9"/>')
+    for k, b in enumerate(bs):
+        bx, by = at[k]
+        word = b.title.upper()
+        size = 220.0
+        world.append(sh.text(bx - 40, by - 70, word, size, "k", "ink",
+                             extra=f' transform="rotate({n(-ANGLE)} {n(bx - 40)} {n(by - 70)})" opacity=".92"'))
+        world.append(f'<rect x="{n(bx - 14)}" y="{n(by - 14)}" width="{n(b.w + 28)}" height="{n(b.h + 28)}" class="ink"/>'
+                     f'<rect x="{n(bx + b.w - 120)}" y="{n(by + b.h + 14)}" width="134" height="26" class="red"/>')
+    hair = "".join(f'<line x1="{n(-2000 + i * 900)}" y1="{n(3000)}" x2="{n(-2000 + i * 900 + 9000)}" y2="{n(3000 - 9000 * SLOPE)}" class="hair" opacity=".35"/>'
+                   for i in range(int(world_w / 900) + 4))
+
+    # The boards, each shown only while the camera can see it.
+    rules: list[str] = []
+    seen: set[str] = set()
+    hung = []
+    uid = 0
+    for k, b in enumerate(bs):
+        bx, by = at[k]
+        w0, w1 = windows[k]
+        vis = [(0.0, "none"), (max(0.0, w0) / T, "inline"), (min(T, w1) / T, "none"), (reveal[0] / T, "inline")]
+        if k == 0:
+            vis = [(0.0, "inline"), (w1 / T, "none"), (reveal[0] / T, "inline")]
+        if w1 >= reveal[0]:
+            vis = [v for v in vis if v[0] < w1 / T] + [(reveal[0] / T, "inline")]
+        vis = sorted(dict(vis).items())
+        parts = []
+        for poster, px, py, s in b.parts:
+            uid += 1
+            rs, inner, w, h = scope(poster, f"p{uid}-")
+            for r in rs:
+                if r not in seen:
+                    seen.add(r)
+                    rules.append(r)
+            parts.append(f'<svg x="{n(bx + px)}" y="{n(by + py)}" width="{n(w * s)}" height="{n(h * s)}" viewBox="0 0 {n(w)} {n(h)}">{inner}</svg>')
+        disp = P.smil_keys("display", [(t_, v) for t_, v in vis], T, discrete=True)
+        hung.append(f'<g display="{vis[0][1]}">{disp}<rect x="{n(bx)}" y="{n(by)}" width="{n(b.w)}" height="{n(b.h)}" class="paper"/>{"".join(parts)}</g>')
+
+    # The ball, rolling along the rail between boards (each board has its own once it is there).
+    rx = [(0.0, rail[0][1], rail[0][2])] + [(r[0] / T, r[1], r[2]) for r in rail]
+    shown = [(0.0, "0")]
+    for k in range(len(bs) - 1):
+        s0 = rail[k * 17][0] / T
+        shown += [(s0, "1"), (rail[k * 17 + 16][0] / T, "0")]
+    ball = sh.ball()
+    pos = sorted({round(p[0], 5): p for p in rx}.values())
+    roll = (f'<circle r="44" fill="{ball}">{P.smil_move([(p[0], p[1], p[2]) for p in pos], T)}'
+            f'{P.smil_keys("opacity", shown, T, discrete=True)}</circle>')
+
+    # The clock, on the frame itself: a rail across the foot, a tick at each chapter, a red block.
+    starts, t_ = [], 0.0
+    for k, b in enumerate(bs):
+        starts.append(t_)
+        t_ += b.hold + (MOVE if k + 1 < len(bs) else REVEAL)
+    clock = (f'<rect x="0" y="{n(VH - 6)}" width="{n(VW)}" height="6" class="chip"/>'
+             + "".join(f'<rect x="{n(VW * s_ / T - 1)}" y="{n(VH - 6)}" width="2" height="6" class="paper"/>' for s_ in starts[1:])
+             + f'<rect y="{n(VH - 6)}" width="40" height="6" class="red">{P.smil("x", ["-40", n(VW)], T)}</rect>')
+
+    sh.css.extend(rules)
+    body = (f'<g transform="translate({n(VW / 2)} {n(VH / 2)})"><g>{cam_s}<g>{cam_t}'
+            f'{hair}{"".join(world)}{"".join(hung)}{roll}</g></g></g>{clock}')
+    return sh.render(body)
+
+
+README = """<a href="{site}">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./humanfia-portfolio-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./humanfia-portfolio-light.svg">
+    <img src="./humanfia-portfolio-light.svg" width="100%" alt="{alt}" />
+  </picture>
+</a>
+"""
+
+
+def readme(f: Facts) -> str:
+    alt = (f"Humanfia: {f.headline or 'we build the flow around the agents'} A tour, in one shot, of the mark, "
+           "the projects, the runtime, the flows, the results, the latest news and the people, generated from humanfia.ai.")
+    return README.format(site=SITE, alt=esc(" ".join(alt.split())))
 
 
 # ----------------------------------------------------------------------------------------- main
@@ -1453,22 +1659,13 @@ def build(f: Facts) -> tuple[list[Poster], str]:
 def main() -> None:
     themes = [os.environ["THEME"]] if os.environ.get("THEME") else ["light", "dark"]
     facts = gather()
-    posters, readme = build(facts)
     for theme in themes:
-        out = PROFILE / ART / theme
-        if out.exists():
-            shutil.rmtree(out)  # a section the site dropped takes its posters with it
-        out.mkdir(parents=True)
-        total = 0
-        for p in posters:
-            path = out / f"{p.name}.svg"
-            path.write_text(p.draw(theme), encoding="utf-8")
-            total += path.stat().st_size
-        print(f"wrote {len(posters)} posters to {out.relative_to(ROOT)} ({total // 1024} KB)")
-    (PROFILE / "README.md").write_text(readme, encoding="utf-8")
-    for old in PROFILE.glob("humanfia-portfolio-*.svg"):  # the single banner this replaced
-        old.unlink()
-    print("wrote profile/README.md")
+        out = PROFILE / f"humanfia-portfolio-{theme}.svg"
+        out.write_text(film(theme, facts), encoding="utf-8")
+        print(f"wrote {out.relative_to(ROOT)} ({out.stat().st_size // 1024} KB)")
+    (PROFILE / "README.md").write_text(readme(facts), encoding="utf-8")
+    if (PROFILE / ART).exists():
+        shutil.rmtree(PROFILE / ART)  # the poster wall this replaced
 
 
 if __name__ == "__main__":

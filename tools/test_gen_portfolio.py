@@ -202,68 +202,65 @@ class Geometry(unittest.TestCase):
             self.assertEqual([float(t) for t in times.split(";")], sorted(float(t) for t in times.split(";")))
 
 
-class Posters(unittest.TestCase):
+class Film(unittest.TestCase):
     def setUp(self) -> None:
-        self.posters, self.readme = g.build(facts())
+        self.f = facts()
+        self.films = {theme: g.film(theme, self.f) for theme in ("light", "dark")}
 
-    def test_every_poster_is_well_formed_in_both_themes(self) -> None:
-        for p in self.posters:
-            for theme in ("light", "dark"):
-                with self.subTest(poster=p.name, theme=theme):
-                    ET.fromstring(p.draw(theme))
+    def test_well_formed_in_both_themes_with_every_chapter(self) -> None:
+        for svg in self.films.values():
+            ET.fromstring(svg)
+        self.assertEqual([b.title for b in g.boards("light", self.f)],
+                         ["Humanfia", "Projects", "Runtime", "Flows", "Results", "Latest", "People", "Address"])
 
-    def test_the_readme_shows_every_poster_in_both_themes(self) -> None:
-        for p in self.posters:
-            for theme in ("light", "dark"):
-                self.assertIn(f"./art/{theme}/{p.name}.svg", self.readme)
+    def test_one_shot_of_more_than_two_minutes(self) -> None:
+        svg = self.films["light"]
+        camera = re.search(r'type="scale" dur="([\d.]+)s"', svg)
+        self.assertGreaterEqual(float(camera.group(1)), 120)
+        self.assertEqual(len(re.findall(r'<svg ', svg)) - 1, sum(len(b.parts) for b in g.boards("light", self.f)))
 
-    def test_every_card_is_a_link_to_its_page(self) -> None:
-        for href in ("https://humanfia.ai/projects/kda", "https://humanfia.ai/flows/flame-chase", "https://humanfia.ai/news/imo",
-                     "https://x", "https://github.com/futrime", "https://github.com/humanfia"):
-            self.assertIn(f'<a href="{href}"><picture>', self.readme)
-
-    def test_the_long_sections_fold(self) -> None:
-        self.assertEqual(self.readme.count("<details"), 2)
-        self.assertEqual(self.readme.count("</details>"), 2)
-
-    def test_sections_without_a_source_are_left_out(self) -> None:
-        posters, readme = g.build(g.Facts(g.parse_logo(LOGO)))
-        self.assertEqual([p.name for p in posters], ["hero", "outro"])
-        self.assertNotIn("<details", readme)
-        for p in posters:
-            ET.fromstring(p.draw("light"))
+    def test_chapters_without_a_source_are_left_out(self) -> None:
+        bare = g.Facts(g.parse_logo(LOGO))
+        self.assertEqual([b.title for b in g.boards("light", bare)], ["Humanfia", "Address"])
+        ET.fromstring(g.film("dark", bare))
 
     def test_every_animation_has_valid_key_times(self) -> None:
-        for p in self.posters:
-            svg = p.draw("dark")
-            for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
-                ts = [float(t) for t in times.split(";")]
-                self.assertEqual((ts[0], ts[-1]), (0.0, 1.0), p.name)
-                self.assertEqual(ts, sorted(ts), p.name)
-                self.assertEqual(len(ts), len(values.split(";")), p.name)
+        for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', self.films["dark"]):
+            ts = [float(t) for t in times.split(";")]
+            self.assertEqual((ts[0], ts[-1]), (0.0, 1.0))
+            self.assertEqual(ts, sorted(ts))
+            self.assertEqual(len(ts), len(values.split(";")))
+
+    def test_ids_and_keyframes_stay_unique_once_the_posters_share_a_document(self) -> None:
+        svg = self.films["light"]
+        ids = re.findall(r'\bid="([^"]+)"', svg)
+        self.assertEqual(len(ids), len(set(ids)))
+        frames = re.findall(r"@keyframes ([\w-]+)", svg)
+        self.assertEqual(len(frames), len(set(frames)))
 
     def test_no_text_under_13px(self) -> None:
-        for p in self.posters:
-            sizes = [float(s) for s in re.findall(r"font-size:([\d.]+)px", p.draw("light"))]
-            self.assertGreaterEqual(min(sizes, default=13), 13, p.name)
+        sizes = [float(s) for s in re.findall(r"font-size:([\d.]+)px", self.films["light"])]
+        self.assertGreaterEqual(min(sizes), 13)
 
     def test_nothing_is_loaded_and_nothing_runs(self) -> None:
-        for p in self.posters:
-            svg = p.draw("light")
-            self.assertNotIn("<script", svg)
-            self.assertIsNone(re.search(r'href="(?!#|data:)', svg), p.name)
+        svg = self.films["light"]
+        self.assertNotIn("<script", svg)
+        self.assertIsNone(re.search(r'href="(?!#|data:)', svg))
 
     def test_no_one_is_marked_out_on_the_wall(self) -> None:
-        coins = [p.draw("light") for p in self.posters if p.name.startswith("person-")]
-        red = g.THEMES["light"]["red"]
-        for svg in coins:
-            self.assertNotIn(red, svg.split("</style>", 1)[1])
+        for i, p in enumerate(self.f.people):
+            svg = g.person_coin("light", p, i)
+            self.assertNotIn(g.THEMES["light"]["red"], svg.split("</style>", 1)[1])
             self.assertNotIn("saturate", svg)  # faces in their own colours
 
     def test_the_runtime_marks_the_native_model_call(self) -> None:
-        runtime = next(p for p in self.posters if p.name == "runtime").draw("light")
-        self.assertIn("litellm · a model call", runtime)
-        self.assertRegex(runtime, r'class="red"/><text[^>]*>litellm · a model call')
+        self.assertRegex(g.runtime("light", self.f), r'class="red"/><text[^>]*>litellm · a model call')
+
+    def test_the_readme_is_the_film_linked_to_the_site(self) -> None:
+        md = g.readme(self.f)
+        self.assertIn('<a href="https://humanfia.ai">', md)
+        for theme in ("light", "dark"):
+            self.assertIn(f"./humanfia-portfolio-{theme}.svg", md)
 
     def test_the_i_dot_sits_over_the_dotless_i(self) -> None:
         _, (cx, cy, r), _ = g.wordmark(0, 100, 1.0)
