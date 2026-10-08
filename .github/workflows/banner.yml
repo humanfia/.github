@@ -7,9 +7,9 @@ name: banner
 on:
   push:
     branches: [main]
-    paths: [tools/**, profile/*.svg, .github/workflows/banner.yml]
+    paths: [tools/**, profile/**, .github/workflows/banner.yml]
   pull_request:
-    paths: [tools/**, profile/*.svg, .github/workflows/banner.yml]
+    paths: [tools/**, profile/**, .github/workflows/banner.yml]
 
 permissions:
   contents: read

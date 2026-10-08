@@ -1,4 +1,4 @@
-"""Offline tests for gen_portfolio.py: how it reads the site, and the banner it draws.
+"""Offline tests for gen_portfolio.py and proun.py: how the site is read, and the posters drawn.
 
     python3 -m unittest discover -s tools -p 'test_*.py'
 """
@@ -11,29 +11,26 @@ from unittest import mock
 from xml.etree import ElementTree as ET
 
 import gen_portfolio as g
+import proun as P
 
 NAV = """<nav class="VPNavBarMenu menu"><span>Main Navigation</span>
 <div class="VPFlyout VPNavBarMenuGroup"><button type="button" class="button"><span class="text"><span>Projects</span></span></button>
 <div class="menu"><div class="VPMenu"><div class="items">
-<div class="VPMenuLink"><a class="VPLink link" href="/projects/humanize"><span>Humanize 2: Agent Flow System</span></a></div>
+<div class="VPMenuLink"><a class="VPLink link" href="/projects/humanize"><span>Humanize</span></a></div>
 <div class="VPMenuLink"><a class="VPLink link" href="/projects/kda"><span>KDA</span></a></div>
 </div></div></div></div>
-<div class="VPFlyout VPNavBarMenuGroup"><button type="button" class="button"><span class="text"><span>Flows</span></span></button>
-<div class="menu"><div class="VPMenu"><div class="items">
-<div class="VPMenuGroup"><p class="title">Every flow</p><div class="VPMenuLink"><a class="VPLink link" href="/flows/"><span>The catalogue</span></a></div></div>
-<div class="VPMenuGroup"><p class="title">A relay</p><div class="VPMenuLink"><a class="VPLink link" href="/flows/flame-chase"><span>flame_chase</span></a></div></div>
-<div class="VPMenuGroup"><p class="title">Maker and checker</p><div class="VPMenuLink"><a class="VPLink link" href="/flows/rlar"><span>rlar</span></a></div>
-<div class="VPMenuLink"><a class="VPLink link" href="/flows/aot"><span>aot</span></a></div></div>
-</div></div></div></div>
+<a class="VPLink link VPNavBarMenuLink" href="/flows/"><span>Flows</span></a>
 <a class="VPLink link VPNavBarMenuLink" href="/blog/"><span>Blog</span></a>
 <a class="VPLink link VPNavBarMenuLink" href="/about/"><span>About</span></a>
 </nav><nav class="VPNavBarMenu"><a class="VPNavBarMenuLink" href="/x/">Second nav, ignored</a></nav>"""
 
 HOME = """<html><head><title>Humanfia — we build the flow around the agents</title></head><body>
-<section class="h-hero"><p class="h-kicker">Open-source agent flows</p><h1>We build the flow around the agents.</h1></section>
-<section><p class="h-manifesto-text"><span>Models get better. </span><span>The flow is what lasts.</span></p></section>
+<section class="h-hero"><p class="h-kicker">Open-source agent flows</p><h1>We build the flow around the agents.</h1>
+<p class="h-lead">The runtime, the flows and the referee.</p></section>
+<section class="h-manifesto"><ol class="h-manifesto-acts"><li>Models improve.</li><li class="last">We build the flow.</li></ol></section>
 <div class="h-feature"><h3>A budget it keeps</h3><p>Stop on time.</p></div>
-<a class="h-tile"><span class="h-tile-label">IMO 2026</span><span class="h-tile-num">6/6</span></a></body></html>"""
+<a class="h-tile w4" href="/news/imo"><span class="h-tile-label">IMO 2026</span><span class="h-tile-num">6/6</span>
+<span class="h-tile-body">Every problem.</span></a></body></html>"""
 
 DOCS = """<div class="arch"><div class="stack">
 <section class="band"><header><h3>Flows</h3><p>what the work is</p></header><ul class="chips"><li><span>chat</span></li></ul></section>
@@ -42,16 +39,27 @@ DOCS = """<div class="arch"><div class="stack">
 <ul class="chips"><li><span>claude</span></li><li><span>dsh<small>SDK</small></span></li><li><span>litellm<small>a model call</small></span></li></ul></section>
 </div></div>"""
 
-FLOW = """<main><h1>rlar</h1><p>Have every round reviewed. More words.</p><table><thead><tr><th>Role</th><th>What it is</th><th>How</th><th>Does</th></tr></thead>
-<tbody><tr><td>actor</td><td>agent, required</td><td>-a actor=</td><td>Does the work.</td></tr>
-<tr><td>reviewer</td><td>agent, required</td><td>-a reviewer=</td><td>Reads the repository.</td></tr>
-<tr><td>budget</td><td>param</td><td>-p</td><td>Stops.</td></tr></tbody></table></main>"""
+FLOWS = """<main><div class="mosaic">
+<a class="xl wash tile" href="/flows/flame-chase"><div class="pic"><svg></svg></div><p class="tile-meta"><span class="tile-tag">A relay</span>
+<span>ships with humanize</span></p><h3>flame_chase</h3><p class="tile-blurb">Two agents take turns.</p>
+<div class="tile-foot"><dl><div><dt>-a</dt><dd>first_chaser · second_chaser</dd></div><div><dt>ends</dt><dd>3 failed turns</dd></div></dl></div></a>
+<a class="sm tile" href="/flows/parallel"><p class="tile-meta"><span class="tile-tag">Lanes at once</span><span>flowverse · v0.1.0</span></p>
+<h3>flame_chasoid:<wbr>parallel</h3><p class="tile-blurb">Three lanes.</p></a>
+<a class="sm tile" href="/flows/parallel"><h3>a duplicate</h3></a>
+<a class="other" href="/flows/x"><h3>not a tile</h3></a></div></main>"""
+
+PROJECT = """<main><p class="hz-kicker">Humanize · the agent flow system</p><h1 class="hero-title">One flow.<br>Every agent.</h1>
+<p class="hz-lead">Humanize drives the CLI you log into. More.</p></main>"""
+
+KDA = """<main><p class="hero-status kd-kicker"><span>Project</span>Open research · built with a lab</p>
+<h1 class="hero-title"><span class="hero-main">KDA</span><span class="hero-sub">Kernel Design Agents</span></h1>
+<p class="hero-stand">An agent workflow for kernels. More.</p></main>"""
 
 ABOUT = """<main><p class="lede">We build. These are the people who do it.</p>
 <li class="person"><a class="person-face" href="https://github.com/futrime"><img src="https://example.com/a.png"></a>
 <p class="person-name">Zijian Zhang <span class="lead">Lead</span></p><p class="person-handle"><a href="https://github.com/futrime">@futrime</a></p></li>
 <p>The bet. We think the loop is what lasts — models are rented.</p>
-<ul class="principles"><li><b>The builder is not the judge.</b> More.</li></ul>
+<ul class="principles"><li><b>The builder is not the judge.</b> More.</li><li><b>Build in public.</b></li></ul>
 <div class="contact"><a href="https://github.com/humanfia"><b>A question</b><span>Open an issue.</span></a></div></main>"""
 
 LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title id="t">H</title>
@@ -66,65 +74,70 @@ def facts() -> g.Facts:
     f = g.Facts(g.parse_logo(LOGO))
     g.home_facts(f, g.dom(HOME))
     g.docs_facts(f, g.dom(DOCS))
-    f.flows = [("Maker and checker", ["rlar", "aot"])]
-    f.loop = g.parse_loop("rlar", g.dom(FLOW))
-    f.projects = [g.Project("KDA", "Kernel Design Agents", "1.39×", "Past the best human entries")]
+    with mock.patch.object(g, "fetch", return_value=FLOWS):
+        g.flow_facts(f, g.parse_nav(g.dom(NAV)))
+    f.projects = [g.Project("KDA", "https://humanfia.ai/projects/kda", "Kernel Design Agents", "An agent workflow.")]
     f.posts = [g.Post("NEWS", "Title & <more>", "https://x", 0, "Oct 2, 2026", "Ann")]
-    f.people = [g.Person("Zijian Zhang", "futrime")]
-    f.principles, f.contact = ["The builder is not the judge."], [("A question", "github.com/humanfia")]
+    f.people = [g.Person("Zijian Zhang", "futrime"), g.Person("Ann Bo", "annbo", "data:image/png;base64,AAAA")]
+    f.principles, f.contact = ["The builder is not the judge.", "Build in public."], [("A question", "https://github.com/humanfia")]
     return f
 
 
 class Reading(unittest.TestCase):
-    def test_nav_groups_and_links_from_the_first_nav_only(self) -> None:
+    def test_nav_flyouts_and_links_from_the_first_nav_only(self) -> None:
         nav = g.parse_nav(g.dom(NAV))
         self.assertEqual([m.label for m in nav], ["Projects", "Flows", "Blog", "About"])
-        self.assertEqual(nav[0].items, [("Humanize 2: Agent Flow System", "/projects/humanize"), ("KDA", "/projects/kda")])
-        self.assertEqual([t for t, _ in nav[1].groups], ["Every flow", "A relay", "Maker and checker"])
-        self.assertEqual(g.find(nav, "about").href, "/about/")
-
-    def test_flows_skip_the_catalogue_and_run_a_maker_and_checker(self) -> None:
-        f = g.Facts(g.parse_logo(LOGO))
-        pages = {"/flows/rlar": FLOW}
-        with mock.patch.object(g, "fetch", side_effect=lambda p: pages.get(p, "<main></main>")):
-            g.flow_facts(f, g.parse_nav(g.dom(NAV)))
-        self.assertEqual(f.flows, [("A relay", ["flame_chase"]), ("Maker and checker", ["rlar", "aot"])])
-        self.assertEqual(f.loop, g.Loop("rlar", "Have every round reviewed.",
-                                        [("actor", "Does the work."), ("reviewer", "Reads the repository.")]))
+        self.assertEqual(nav[0].items, [("Humanize", "/projects/humanize"), ("KDA", "/projects/kda")])
+        self.assertEqual(g.find(nav, "flows").href, "/flows/")
 
     def test_home_and_docs(self) -> None:
         f = facts()
         self.assertEqual((f.kicker, f.headline), ("Open-source agent flows", "We build the flow around the agents."))
-        self.assertEqual(f.manifesto, ["Models get better.", "The flow is what lasts."])
+        self.assertEqual(f.lead, "The runtime, the flows and the referee.")
+        self.assertEqual(f.acts, ["Models improve.", "We build the flow."])
         self.assertEqual(f.features, [("A budget it keeps", "Stop on time.")])
-        self.assertEqual(f.results, [("IMO 2026", "6/6")])
+        self.assertEqual(f.results, [g.Result("IMO 2026", "6/6", "Every problem.", "https://humanfia.ai/news/imo")])
         self.assertEqual([b.title for b in f.bands], ["Flows", "Coding agents"])
         self.assertEqual(f.bands[0].down, "a turn: a prompt, on one conversation, at a model and an effort")
         self.assertEqual(f.bands[1].chips, [("claude", ""), ("dsh", "SDK"), ("litellm", "a model call")])
+
+    def test_the_old_one_paragraph_manifesto_still_reads(self) -> None:
+        f = g.Facts(g.parse_logo(LOGO))
+        g.home_facts(f, g.dom('<p class="h-manifesto-text"><span>Models get better. </span><span>The flow lasts.</span></p>'))
+        self.assertEqual(f.acts, ["Models get better.", "The flow lasts."])
+
+    def test_flows_come_from_the_catalogue_tiles_once_each(self) -> None:
+        f = facts()
+        self.assertEqual([(fl.name, fl.tag, fl.href) for fl in f.flows],
+                         [("flame_chase", "A relay", "https://humanfia.ai/flows/flame-chase"),
+                          ("flame_chasoid:parallel", "Lanes at once", "https://humanfia.ai/flows/parallel")])
+        self.assertEqual((f.flows[0].roles, f.flows[0].ends, f.flows[0].source),
+                         (["first_chaser", "second_chaser"], "3 failed turns", "ships with humanize"))
+        self.assertEqual([g.pattern(fl.tag, fl.name) for fl in f.flows], ["relay", "lanes"])
+
+    def test_a_project_says_what_it_is_from_its_subtitle_or_its_kicker(self) -> None:
+        f = g.Facts(g.parse_logo(LOGO))
+        pages = {"/projects/humanize": PROJECT, "/projects/kda": KDA}
+        with mock.patch.object(g, "fetch", side_effect=lambda p: pages.get(p)):
+            g.project_facts(f, g.parse_nav(g.dom(NAV)))
+        self.assertEqual([(p.name, p.sub, p.lede) for p in f.projects],
+                         [("Humanize", "the agent flow system", "Humanize drives the CLI you log into."),
+                          ("KDA", "Kernel Design Agents", "An agent workflow for kernels.")])
+
+    def test_a_project_page_that_is_gone_still_counts(self) -> None:
+        f = g.Facts(g.parse_logo(LOGO))
+        with mock.patch.object(g, "fetch", return_value=None):
+            g.project_facts(f, g.parse_nav(g.dom(NAV)))
+        self.assertEqual([(p.name, p.sub) for p in f.projects], [("Humanize", ""), ("KDA", "")])
 
     def test_people_principles_contact_and_the_bet(self) -> None:
         f = g.Facts(g.parse_logo(LOGO))
         with mock.patch.object(g, "fetch", return_value=ABOUT), mock.patch.object(g, "avatar", return_value=""):
             g.people_facts(f, [g.Menu("About", "/about/")])
         self.assertEqual([(p.name, p.handle) for p in f.people], [("Zijian Zhang", "futrime")])
-        self.assertEqual(f.principles, ["The builder is not the judge."])
-        self.assertEqual(f.contact, [("A question", "github.com/humanfia")])
+        self.assertEqual(f.principles, ["The builder is not the judge.", "Build in public."])
+        self.assertEqual(f.contact, [("A question", "https://github.com/humanfia")])
         self.assertEqual(f.bet, "We think the loop is what lasts — models are rented.")
-
-    def test_project_stat_strip_and_lede(self) -> None:
-        page = ('<main><p class="lede">Kernel Design Agents. More.</p><div class="stat-strip"><div><b>1.39×</b>'
-                "<span>Past the best human entries</span><em>Contest</em></div></div></main>")
-        f = g.Facts(g.parse_logo(LOGO))
-        with mock.patch.object(g, "fetch", return_value=page):
-            g.project_facts(f, g.parse_nav(g.dom(NAV)))
-        self.assertEqual(f.projects[1], g.Project("KDA", "Kernel Design Agents", "1.39×", "Past the best human entries"))
-        self.assertEqual(f.projects[0].lede, "Kernel Design Agents")
-
-    def test_a_page_with_an_empty_lede_still_counts(self) -> None:
-        f = g.Facts(g.parse_logo(LOGO))
-        with mock.patch.object(g, "fetch", return_value='<main><p class="lede"><img src="x"></p></main>'):
-            g.project_facts(f, g.parse_nav(g.dom(NAV)))
-        self.assertEqual([(p.name, p.sub) for p in f.projects], [("Humanize 2", "Agent Flow System"), ("KDA", "")])
 
     def test_feed_reads_authors_and_survives_a_missing_feed(self) -> None:
         with mock.patch.object(g, "fetch", side_effect=lambda p: RSS if "news" in p else None):
@@ -168,35 +181,89 @@ class Logo(unittest.TestCase):
         self.assertIn('xlink:href="#logo-p"', logo.body)
 
 
-class Banner(unittest.TestCase):
-    def test_well_formed_in_both_themes_with_every_chapter(self) -> None:
-        for theme in ("light", "dark"):
-            ET.fromstring(g.banner(theme, facts()))
-        self.assertEqual([s.kicker for s in g.scenes(facts())],
-                         ["Humanfia", "The thesis", "Humanize, the runtime", "A turn, and what it keeps", "Flows",
-                          "A flow, running: rlar", "Projects", "News and blog", "The people", "Find us"])
+class Geometry(unittest.TestCase):
+    def test_rotations_are_orthonormal(self) -> None:
+        m = P.rot(37, -21, 8)
+        for i in range(3):
+            for j in range(3):
+                self.assertAlmostEqual(sum(m[i][k] * m[j][k] for k in range(3)), float(i == j))
 
-    def test_chapters_without_a_source_are_dropped_and_the_clock_still_runs_120s(self) -> None:
-        bare = g.Facts(g.parse_logo(LOGO))
-        self.assertEqual([s.kicker for s in g.scenes(bare)], ["Humanfia", "Find us"])
-        svg = g.banner("light", bare)
-        ET.fromstring(svg)
-        self.assertEqual(set(re.findall(r'dur="([^"]+)"', svg)), {"120s"})
+    def test_a_solid_shows_each_face_only_while_it_faces_you(self) -> None:
+        cube = P.box(10, 10, 10)
+        front = P.rot(0, 0)
+        svg = cube.draw([front, front], 1, (0, 0), 1, "#ffffff", "#000000")
+        self.assertEqual(svg.count("<path"), 1)  # head on, a cube is one square
 
-    def test_every_animation_is_on_one_clock_with_valid_key_times(self) -> None:
-        svg = g.banner("dark", facts())
+    def test_the_odometer_lands_on_each_digit(self) -> None:
+        svg, _ = P.odometer(0, 50, "6/6", 40, "k", 10, 0.3, 30, "o")
         for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
-            ts = [float(t) for t in times.split(";")]
-            self.assertEqual((ts[0], ts[-1]), (0.0, 1.0))
-            self.assertEqual(ts, sorted(ts))
-            self.assertEqual(len(ts), len(values.split(";")))
+            ys = [float(v.split()[1]) for v in values.split(";")]
+            self.assertAlmostEqual(ys[2] / (-40 * 1.22), 26)  # 20 + 6: two turns, then the 6
+            self.assertEqual([float(t) for t in times.split(";")], sorted(float(t) for t in times.split(";")))
 
-    def test_no_text_under_14px(self) -> None:
-        sizes = [float(s) for s in re.findall(r"font-size:([\d.]+)px", g.banner("light", facts()))]
-        self.assertGreaterEqual(min(sizes), 14)
+
+class Posters(unittest.TestCase):
+    def setUp(self) -> None:
+        self.posters, self.readme = g.build(facts())
+
+    def test_every_poster_is_well_formed_in_both_themes(self) -> None:
+        for p in self.posters:
+            for theme in ("light", "dark"):
+                with self.subTest(poster=p.name, theme=theme):
+                    ET.fromstring(p.draw(theme))
+
+    def test_the_readme_shows_every_poster_in_both_themes(self) -> None:
+        for p in self.posters:
+            for theme in ("light", "dark"):
+                self.assertIn(f"./art/{theme}/{p.name}.svg", self.readme)
+
+    def test_every_card_is_a_link_to_its_page(self) -> None:
+        for href in ("https://humanfia.ai/projects/kda", "https://humanfia.ai/flows/flame-chase", "https://humanfia.ai/news/imo",
+                     "https://x", "https://github.com/futrime", "https://github.com/humanfia"):
+            self.assertIn(f'<a href="{href}"><picture>', self.readme)
+
+    def test_the_long_sections_fold(self) -> None:
+        self.assertEqual(self.readme.count("<details"), 2)
+        self.assertEqual(self.readme.count("</details>"), 2)
+
+    def test_sections_without_a_source_are_left_out(self) -> None:
+        posters, readme = g.build(g.Facts(g.parse_logo(LOGO)))
+        self.assertEqual([p.name for p in posters], ["hero", "outro"])
+        self.assertNotIn("<details", readme)
+        for p in posters:
+            ET.fromstring(p.draw("light"))
+
+    def test_every_animation_has_valid_key_times(self) -> None:
+        for p in self.posters:
+            svg = p.draw("dark")
+            for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
+                ts = [float(t) for t in times.split(";")]
+                self.assertEqual((ts[0], ts[-1]), (0.0, 1.0), p.name)
+                self.assertEqual(ts, sorted(ts), p.name)
+                self.assertEqual(len(ts), len(values.split(";")), p.name)
+
+    def test_no_text_under_13px(self) -> None:
+        for p in self.posters:
+            sizes = [float(s) for s in re.findall(r"font-size:([\d.]+)px", p.draw("light"))]
+            self.assertGreaterEqual(min(sizes, default=13), 13, p.name)
+
+    def test_nothing_is_loaded_and_nothing_runs(self) -> None:
+        for p in self.posters:
+            svg = p.draw("light")
+            self.assertNotIn("<script", svg)
+            self.assertIsNone(re.search(r'href="(?!#|data:)', svg), p.name)
+
+    def test_no_one_is_marked_out_on_the_wall(self) -> None:
+        coins = [p.draw("light") for p in self.posters if p.name.startswith("person-")]
+        red = g.THEMES["light"]["red"]
+        for svg in coins:
+            self.assertNotIn(red, svg.split("</style>", 1)[1])
+            self.assertNotIn("saturate", svg)  # faces in their own colours
 
     def test_the_runtime_marks_the_native_model_call(self) -> None:
-        self.assertIn("litellm: a model call", g.banner("light", facts()))
+        runtime = next(p for p in self.posters if p.name == "runtime").draw("light")
+        self.assertIn("litellm · a model call", runtime)
+        self.assertRegex(runtime, r'class="red"/><text[^>]*>litellm · a model call')
 
     def test_the_i_dot_sits_over_the_dotless_i(self) -> None:
         _, (cx, cy, r), _ = g.wordmark(0, 100, 1.0)
