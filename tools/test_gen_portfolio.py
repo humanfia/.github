@@ -113,7 +113,7 @@ class Reading(unittest.TestCase):
                           ("flame_chasoid:parallel", "Lanes at once", "https://humanfia.ai/flows/parallel")])
         self.assertEqual((f.flows[0].roles, f.flows[0].ends, f.flows[0].source),
                          (["first_chaser", "second_chaser"], "3 failed turns", "ships with humanize"))
-        self.assertEqual([g.pattern(fl.tag, fl.name) for fl in f.flows], ["relay", "lanes"])
+        self.assertEqual([g.kind_of(fl) for fl in f.flows], ["relay", "lanes"])
 
     def test_a_project_says_what_it_is_from_its_subtitle_or_its_kicker(self) -> None:
         f = g.Facts(g.parse_logo(LOGO))
@@ -202,36 +202,62 @@ class Geometry(unittest.TestCase):
             self.assertEqual([float(t) for t in times.split(";")], sorted(float(t) for t in times.split(";")))
 
 
-class Film(unittest.TestCase):
+class Spot(unittest.TestCase):
     def setUp(self) -> None:
         self.f = facts()
         self.films = {theme: g.film(theme, self.f) for theme in ("light", "dark")}
 
-    def test_well_formed_in_both_themes_with_every_chapter(self) -> None:
+    def film_of(self, shot: str) -> str:
+        """One shot's svg, drawn on a clock of the whole cut."""
+        plan = g.storyboard(self.f)
+        F = g.Film("light", self.f, sum(s.seconds for s in plan))
+        t = 0.0
+        for s in plan:
+            if s.name == shot:
+                return s.draw(F, t, t + s.seconds)
+            t += s.seconds
+        raise KeyError(shot)
+
+    def test_well_formed_in_both_themes_with_every_section(self) -> None:
         for svg in self.films.values():
             ET.fromstring(svg)
-        self.assertEqual([b.title for b in g.boards("light", self.f)],
-                         ["Humanfia", "Projects", "Runtime", "Flows", "Results", "Latest", "People", "Address"])
+        names = [s.name for s in g.storyboard(self.f)]
+        self.assertEqual(names[:3], ["drop", "mark", "headline"])
+        for part in ("act0", "bump-The runtime", "tower", "feature0", "flows", "flow1", "bump-Projects", "project0",
+                     "result0", "post0", "people", "principles"):
+            self.assertIn(part, names)
+        self.assertEqual(names[-1], "outro")
 
-    def test_one_shot_of_more_than_two_minutes(self) -> None:
-        svg = self.films["light"]
-        camera = re.search(r'type="scale" dur="([\d.]+)s"', svg)
-        self.assertGreaterEqual(float(camera.group(1)), 120)
-        self.assertEqual(len(re.findall(r'<svg ', svg)) - 1, sum(len(b.parts) for b in g.boards("light", self.f)))
+    def test_cut_like_a_spot_of_more_than_two_minutes(self) -> None:
+        f = self.f
+        f.flows = f.flows * 7
+        f.results = f.results * 12
+        f.projects = [f.projects[0]] * 5
+        f.posts = f.posts * 5
+        f.people = f.people * 9
+        f.acts = f.acts * 2
+        f.features = f.features * 3
+        plan = g.storyboard(f)
+        self.assertGreaterEqual(sum(s.seconds for s in plan), 120)
+        self.assertLessEqual(max(s.seconds for s in plan), 6.5)        # no shot lingers
+        self.assertLess(sum(s.seconds for s in plan) / len(plan), 2.6)  # most are a beat or two
 
-    def test_chapters_without_a_source_are_left_out(self) -> None:
+    def test_sections_without_a_source_are_left_out(self) -> None:
         bare = g.Facts(g.parse_logo(LOGO))
-        self.assertEqual([b.title for b in g.boards("light", bare)], ["Humanfia", "Address"])
+        self.assertEqual([s.name for s in g.storyboard(bare)], ["drop", "mark", "outro"])
         ET.fromstring(g.film("dark", bare))
 
-    def test_every_animation_has_valid_key_times(self) -> None:
-        for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', self.films["dark"]):
+    def test_one_clock_and_valid_key_times(self) -> None:
+        svg = self.films["dark"]
+        T = sum(s.seconds for s in g.storyboard(self.f))
+        self.assertEqual({float(d) for d in re.findall(r'<animate[^>]*dur="([\d.]+)s" repeatCount="indefinite"[^>]*keyTimes', svg)}, {round(T, 2)})
+        for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
             ts = [float(t) for t in times.split(";")]
             self.assertEqual((ts[0], ts[-1]), (0.0, 1.0))
             self.assertEqual(ts, sorted(ts))
             self.assertEqual(len(ts), len(values.split(";")))
 
-    def test_ids_and_keyframes_stay_unique_once_the_posters_share_a_document(self) -> None:
+    def test_ids_and_keyframes_are_unique(self) -> None:
         svg = self.films["light"]
         ids = re.findall(r'\bid="([^"]+)"', svg)
         self.assertEqual(len(ids), len(set(ids)))
@@ -247,14 +273,15 @@ class Film(unittest.TestCase):
         self.assertNotIn("<script", svg)
         self.assertIsNone(re.search(r'href="(?!#|data:)', svg))
 
-    def test_no_one_is_marked_out_on_the_wall(self) -> None:
-        for i, p in enumerate(self.f.people):
-            svg = g.person_coin("light", p, i)
-            self.assertNotIn(g.THEMES["light"]["red"], svg.split("</style>", 1)[1])
-            self.assertNotIn("saturate", svg)  # faces in their own colours
+    def test_no_one_is_marked_out_among_the_people(self) -> None:
+        shot = self.film_of("people")
+        self.assertNotIn('class="red"', shot)
+        self.assertNotIn(g.THEMES["light"]["red"], shot)
+        self.assertNotIn("saturate", shot)  # faces in their own colours
+        self.assertIn("data:image/png;base64,AAAA", shot)
 
     def test_the_runtime_marks_the_native_model_call(self) -> None:
-        self.assertRegex(g.runtime("light", self.f), r'class="red"/><text[^>]*>litellm · a model call')
+        self.assertRegex(self.film_of("tower"), r'class="red"/><text[^>]*>litellm · a model call')
 
     def test_the_readme_is_the_film_linked_to_the_site(self) -> None:
         md = g.readme(self.f)
@@ -262,6 +289,8 @@ class Film(unittest.TestCase):
         for theme in ("light", "dark"):
             self.assertIn(f"./humanfia-portfolio-{theme}.svg", md)
 
+
+class Wordmark(unittest.TestCase):
     def test_the_i_dot_sits_over_the_dotless_i(self) -> None:
         _, (cx, cy, r), _ = g.wordmark(0, 100, 1.0)
         self.assertAlmostEqual(cx, sum(w + 8 for _, w in g._glyphs()[:6]) + g.S / 2)

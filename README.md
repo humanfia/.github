@@ -57,22 +57,23 @@ newer commit, in a pull request of its own.
 
 - `profile/README.md` is the page GitHub shows on the org's overview tab. It holds only the banner, a `<picture>`
   that picks the light or dark SVG with `prefers-color-scheme`, linked to humanfia.ai.
-- `profile/humanfia-portfolio-{light,dark}.svg` is a film of about two and a half minutes, in one shot, one per
-  colour scheme. It keeps the constructivist look -- paper, ink and one red, hard-edged planes, wedges, discs and
-  bars, the logo's one-in-three diagonal, heavy block type, a wordmark built from geometry -- and moves in real 3D:
-  the chapters are boards hung along that diagonal in one world, and a camera holds on each, pans across the wide
-  ones and pulls back between them, while the red ball rolls along the rail to the next. Its chapters:
-  1. the mark: the H extruded into a slab turning over a receding floor, its ball orbiting it
-  2. the projects, each a turning solid
-  3. the Humanize runtime as a tower a turn falls through, and its features with working diagrams
-  4. every flow in the catalogue, its loop acted out
-  5. the results, on counters that spin into place
+- `profile/humanfia-portfolio-{light,dark}.svg` is a two-minute spot, one per colour scheme, cut like a commercial:
+  about fifty shots of one to three seconds, each with one idea set big and moving from its first frame to its
+  last, cut on the beat with whips, punch-ins, irises and flights through the section titles. The red ball is the
+  one actor throughout. It keeps the constructivist look -- paper, ink and one red, hard-edged planes, wedges, discs
+  and bars, the logo's one-in-three diagonal, block capitals cut deep, a wordmark built from geometry -- with real 3D:
+  the H extruded into a turning slab, spinning solids, the runtime as a tower of slabs. Its sections:
+  1. the mark, the headline and the manifesto
+  2. the Humanize runtime, a band at a time, and its features
+  3. every flow in the catalogue, at montage speed, its loop acted out
+  4. the projects
+  5. the results, each spun into place on a counter
   6. the latest news and blog posts
-  7. the people as coins that flip in a wave, and the principles on a turning prism
-  8. the address and the contacts, then a pull-back over the whole world
+  7. the people and the principles
+  8. the address and the contacts
 
-  The geometry is rotated and projected by `tools/proun.py`; the browser only plays it back with SMIL and CSS
-  keyframes. There is no JavaScript and no web font, and the avatars are inlined.
+  The geometry is rotated and projected by `tools/proun.py`; the browser plays it back on one SMIL clock, with CSS
+  keyframes for the extruded mark. There is no JavaScript and no web font, and the avatars are inlined.
 - `tools/gen_portfolio.py` reads the live sites and writes both SVGs and the README:
   - from humanfia.ai: the logo; the home page's headline, lead, manifesto, features and result tiles; the Projects
     menu and each project's page; the `/flows/` catalogue; `/news/feed.rss` and `/blog/feed.rss`; and About (and
