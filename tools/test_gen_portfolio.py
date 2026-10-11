@@ -64,7 +64,7 @@ ABOUT = """<main><p class="lede">We build. These are the people who do it.</p>
 
 LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title id="t">H</title>
 <rect x="6" y="4" width="13" height="56" fill="#000"/>
-<g transform="translate(2 0) scale(2)"><circle id="dot" cx="25" cy="4" r="3" fill="#d6331f"/></g></svg>"""
+<g transform="translate(2 0) scale(2)"><circle id="dot" cx="25" cy="4" r="3" fill="#76b900"/></g></svg>"""
 
 RSS = ('<rss xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><item><title>A</title><link>https://h/news/a</link>'
        "<pubDate>Fri, 02 Oct 2026 00:00:00 GMT</pubDate><dc:creator>Ann, Bo</dc:creator></item></channel></rss>")
@@ -275,13 +275,13 @@ class Spot(unittest.TestCase):
 
     def test_no_one_is_marked_out_among_the_people(self) -> None:
         shot = self.film_of("people")
-        self.assertNotIn('class="red"', shot)
-        self.assertNotIn(g.THEMES["light"]["red"], shot)
+        self.assertNotIn('class="green"', shot)
+        self.assertNotIn(g.THEMES["light"]["green"], shot)
         self.assertNotIn("saturate", shot)  # faces in their own colours
         self.assertIn("data:image/png;base64,AAAA", shot)
 
     def test_the_runtime_marks_the_native_model_call(self) -> None:
-        self.assertRegex(self.film_of("tower"), r'class="red"/><text[^>]*>litellm · a model call')
+        self.assertRegex(self.film_of("tower"), r'class="green"/><text[^>]*>litellm · a model call')
 
     def test_the_readme_is_the_film_linked_to_the_site(self) -> None:
         md = g.readme(self.f)
