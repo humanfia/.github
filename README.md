@@ -12,7 +12,7 @@ and what every humanfia repository inherits rather than copies.
 | [`.github/workflows/uv-python-ci.yml`](.github/workflows/uv-python-ci.yml) | A reusable workflow: the CI of a Python repository built with uv, as below. |
 | [`workflow-templates/`](workflow-templates/) | The starter workflow that calls it, offered under **Actions → New workflow** in every repository of the organization. |
 | [`profile/`](profile/) | The page GitHub shows on the organization's overview tab, with its banner. |
-| [`tools/gen_portfolio.py`](tools/gen_portfolio.py), [`tools/proun.py`](tools/proun.py) | Generate the profile from humanfia.ai, as below. |
+| [`tools/gen_portfolio.py`](tools/gen_portfolio.py) | Generates the profile from humanfia.ai, as below. |
 
 A repository keeps its own copy of a health file only when what it says is particular to that
 repository, as [humanize](https://github.com/humanfia/humanize)'s are. A LICENSE, a README, a
@@ -57,27 +57,29 @@ newer commit, in a pull request of its own.
 
 - `profile/README.md` is the page GitHub shows on the org's overview tab. It holds only the banner, a `<picture>`
   that picks the light or dark SVG with `prefers-color-scheme`, linked to humanfia.ai.
-- `profile/humanfia-portfolio-{light,dark}.svg` is a two-minute spot, one per colour scheme, cut like a commercial:
-  about fifty shots of one to three seconds, each with one idea set big and moving from its first frame to its
-  last, cut on the beat with whips, punch-ins, irises and flights through the section titles. The red ball is the
-  one actor throughout. It keeps the constructivist look -- paper, ink and one red, hard-edged planes, wedges, discs
-  and bars, the logo's one-in-three diagonal, block capitals cut deep, a wordmark built from geometry -- with real 3D:
-  the H extruded into a turning slab, spinning solids, the runtime as a tower of slabs. Its sections:
-  1. the mark, the headline and the manifesto
-  2. the Humanize runtime, a band at a time, and its features
-  3. every flow in the catalogue, at montage speed, its loop acted out
+- `profile/humanfia-portfolio-{light,dark}.svg` is a film of about a minute, one per colour scheme, in flat
+  constructivist planes: discs, wedges and bars on the logo's one-in-three diagonal, block capitals, and humanfia.ai's
+  own colours (its paper and ink, green, cyan, pink, lavender and gold). There is no 3D. Words are kept to names and
+  numbers, and everything else is shown in motion. The green ball, the dot of the H, runs through every shot. Its sections:
+  1. the mark and the headline
+  2. the Humanize runtime: a stair of bars the ball falls through
+  3. the flows: a counter, then each kind of loop acted out by shapes
   4. the projects
-  5. the results, each spun into place on a counter
-  6. the latest news and blog posts
-  7. the people and the principles
-  8. the address and the contacts
+  5. the achievements: a counter, then each number spun onto a counter and drawn as shapes, new ones stamped
+     NEW; the rest stamped onto a wall
+  6. the people, on turning rings
+  7. the address
 
-  The geometry is rotated and projected by `tools/proun.py`; the browser plays it back on one SMIL clock, with CSS
-  keyframes for the extruded mark. There is no JavaScript and no web font, and the avatars are inlined.
+  The browser plays it on one SMIL clock. There is no JavaScript and no web font, and the avatars are inlined.
+- `profile/achievements.json` is the ledger of achievements. Every run adds each news post and home-page tile it
+  has not seen, keeps those the site only stopped featuring, and drops one only when its post is gone (a 404
+  or 410). So a new result reaches the banner with the next build, and no list of what to track is kept anywhere.
+  Anything published in the last 14 days is broadcast first and stamped NEW. Those and the home page's tiles get
+  a shot each, at least eight in all, and the rest go up on walls.
 - `tools/gen_portfolio.py` reads the live sites and writes both SVGs and the README:
-  - from humanfia.ai: the logo; the home page's headline, lead, manifesto, features and result tiles; the Projects
-    menu and each project's page; the `/flows/` catalogue; `/news/feed.rss` and `/blog/feed.rss`; and About (and
-    Team) for the people, the principles and the contacts
+  - from humanfia.ai: the logo; the home page's headline and achievement tiles; the Projects menu and each
+    project's page; the `/flows/` catalogue; `/news/feed.rss`, every post of which is an achievement; and About (and
+    Team) for the people
   - from docs.humanfia.ai: the "how it fits together" bands
 
   A chapter whose source is missing (a 404 or 410, or markup without the parts it needs) is left out. Any other
@@ -85,7 +87,7 @@ newer commit, in a pull request of its own.
 - `.github/workflows/profile.yml` checks every half hour whether humanfia.ai has deployed a commit the profile was
   not built from (`profile/.source-sha`), reading the site's public `deploy` runs with its own token, and runs the
   generator only if so. A run by hand checks the same way unless `force` is set. It runs the generator regardless
-  daily and on a `humanfia-ai-deployed` `repository_dispatch`. It commits only when something under `profile/` changed.
+  daily and on a `humanfia-ai-deployed` `repository_dispatch`. It commits only when something under `profile/` changed, the ledger included.
 
 ### Usage
 

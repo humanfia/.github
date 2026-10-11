@@ -1,0 +1,156 @@
+[
+ {
+  "href": "/news/2026-10-05-lean-eval-v1",
+  "num": "30",
+  "label": "First solves on Lean-Eval v1, the most of anyone",
+  "date": "2026-10-04",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-10-05-hma-mle-bench",
+  "num": "78.2%",
+  "label": "MLE-bench medal rate",
+  "date": "2026-10-03",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-10-05-kda-upstream",
+  "num": "+8.7%",
+  "label": "Throughput from one KDA kernel in SGLang",
+  "date": "2026-10-01",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-10-05-kaggle-biohub-final",
+  "num": "16/39",
+  "label": "Kaggle top 5%",
+  "date": "2026-09-30",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-10-05-olympiads",
+  "num": "5/5",
+  "label": "Science exams at full marks",
+  "date": "2026-09-14",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-10-05-putnambench-672",
+  "num": "672/672",
+  "label": "PutnamBench",
+  "date": "2026-08-27",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-08-18-lean-eval-first",
+  "num": "#1",
+  "label": "on Lean-Eval: 172 proofs",
+  "date": "2026-08-18",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-08-15-kaggle-nineteen-competitions",
+  "num": "3%",
+  "label": "Two Kaggle finishes in the top 3%",
+  "date": "2026-08-15",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-08-14-msa-indexer",
+  "num": "6.5×",
+  "label": "MSA indexer, in production",
+  "date": "2026-08-14",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-08-11-programbench",
+  "num": "3.5%",
+  "label": "ProgramBench",
+  "date": "2026-08-11",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-08-02-kda-15-past-human-sota",
+  "num": "1.69×",
+  "label": "Past the best human kernels",
+  "date": "2026-08-02",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-07-31-qcode-discovery",
+  "num": "17,520",
+  "label": "QCode definitions across 21 lattices",
+  "date": "2026-07-31",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-07-29-physics-and-quantum",
+  "num": "23/23",
+  "label": "at IPhO 2026, in Lean",
+  "date": "2026-07-29",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-07-29-lean-eval-second",
+  "num": "#2",
+  "label": "on Lean-Eval, behind Seed Prover",
+  "date": "2026-07-29",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-07-22-imo-2026",
+  "num": "6/6",
+  "label": "IMO 2026",
+  "date": "2026-07-18",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-07-02-solexec-l1",
+  "num": "0.7639",
+  "label": "First on SOL-ExecBench L1",
+  "date": "2026-07-02",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-06-26-putnambench",
+  "num": "670/672",
+  "label": "on PutnamBench",
+  "date": "2026-06-26",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-06-15-kda-generalizes",
+  "num": "2",
+  "label": "KDA PRs merged in AMD's FlyDSL",
+  "date": "2026-06-26",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-06-22-sol-bench-batch",
+  "num": "71",
+  "label": "First places on SOL-ExecBench",
+  "date": "2026-06-22",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-06-05-kda-sglang",
+  "num": "40+",
+  "label": "agent-tuned operators in SGLang",
+  "date": "2026-06-19",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-05-15-mlsys-flashinfer-top3",
+  "num": "3",
+  "label": "Top 3 on every MLSys 2026 track",
+  "date": "2026-05-15",
+  "added": "2026-10-11"
+ },
+ {
+  "href": "/news/2026-03-01-gem5-scons-to-cmake",
+  "num": "567",
+  "label": "Files changed to port gem5's build from SCons to CMake",
+  "date": "2026-03-01",
+  "added": "2026-10-11"
+ }
+]

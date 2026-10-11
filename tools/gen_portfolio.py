@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
-"""Generate the Humanfia org profile banner from humanfia.ai: a constructivist spot of two minutes.
+"""Generate the Humanfia org profile banner from humanfia.ai: a constructivist film of about a minute.
 
 Nothing about Humanfia is written down here. Every run reads the live sites and cuts what it finds
-together like a commercial -- about fifty shots of one to three seconds, one idea set big in each:
+into short shots, flat and geometric -- discs, wedges, bars on the logo's one-in-three diagonal,
+block capitals -- in the site's own colours. Words are kept to names and numbers; the rest is said
+by things moving:
 
-    the mark        /logo.svg: the ball drops, swells to a green frame, shrinks into the H's slot; the
-                    H, a slab, turns; the wordmark draws itself; the headline slams down a word at a
-                    time with the ball as its full stop; the manifesto, a line a shot
-    the runtime     the Humanize docs' bands: a tower that lands slab by slab, the turn falling
-                    through it, each band's parts flying out as it lands; the home page's features
-    the flows       a counter, then the /flows/ catalogue at montage speed, each loop acted out
-    the projects    the nav's Projects menu: a solid spinning in, the name cut deep
-    the results     the home page's tiles: each number spun into place on a counter
-    the latest      /news/feed.rss and /blog/feed.rss: the kind stamped on, the title cascading in
-    the people      About's roster bursting out of the ball, then turning over as a wave; its
-                    principles stamped on plates, stacking up
-    the address     on green: the H, the site's name, the ball dropping home, About's contacts
+    the mark          /logo.svg: a pink wedge drives into an ink disc, the ball drops into it and
+                      swells; the H lands, the wordmark draws itself, the ball dots the i; the
+                      headline slams down a word at a time with the ball as its full stop
+    the runtime       the Humanize docs' bands: a stair of bars the ball falls through
+    the flows         the /flows/ catalogue: a counter, then each kind of loop acted out by shapes
+    the projects      the nav's Projects menu: each name cut deep across a colour
+    the achievements  every result humanfia.ai has announced (see below): a counter, then each
+                      number spun onto a counter and drawn as shapes, new ones stamped NEW; the
+                      rest stamped onto a wall
+    the people        About's roster bursting out of the ball onto turning rings
+    the address       on green: the H, the site's name, the ball dropping home
 
-Shots are cut on the beat -- whips with speed lines, punch-ins, irises, flights through the
-section titles -- and everything in a shot moves from its first frame to its last. The green ball
-is the one actor all the way through.
+The achievements are kept in profile/achievements.json. Each run adds every news post and home-page
+tile it has not seen, keeps those the site has only stopped featuring, and drops one only when its
+post is gone; nothing has to be told which to track.
 
 A section whose source the site does not have (a 404 or 410, or markup without the parts it needs)
 is left out. Any other failure -- a 403, a 5xx, a timeout -- stops the run, so a bad fetch never
 overwrites a good profile.
 
-GitHub shows README images through <img>: no JavaScript, no web fonts, nothing loaded. So the 3D
-is rotated and projected here (tools/proun.py) and played back by the browser on one SMIL clock,
-with CSS keyframes for the extruded mark; type is the system's heaviest sans, avatars are inlined.
+GitHub shows README images through <img>: no JavaScript, no web fonts, nothing loaded. So the film
+plays on one SMIL clock; type is the system's heaviest sans, avatars are inlined.
 
     python3 tools/gen_portfolio.py              # both banners
     THEME=dark python3 tools/gen_portfolio.py   # one banner (light|dark)
@@ -37,8 +37,10 @@ with CSS keyframes for the extruded mark; type is the system's heaviest sans, av
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import html
 import http.client
+import json
 import math
 import os
 import re
@@ -54,10 +56,6 @@ from pathlib import Path
 from typing import Callable, Iterator
 from xml.etree import ElementTree as ET
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import proun as P  # noqa: E402
-from proun import n  # noqa: E402
-
 SITE = os.environ.get("SITE", "https://humanfia.ai").rstrip("/")
 DOCS = os.environ.get("DOCS", "https://docs.humanfia.ai/humanize").rstrip("/")
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,13 +66,14 @@ XLINK_NS = "http://www.w3.org/1999/xlink"
 ET.register_namespace("", SVG_NS)
 ET.register_namespace("xlink", XLINK_NS)
 
-THEMES = {  # light: ink and NVIDIA's green on a cool white; dark: the white and the green on a
-    # deep teal-black. `night` is the ink that reads on the green in either theme.
-    "light": {"paper": "#f4f8f9", "ink": "#141a1f", "green": "#76b900", "mute": "#5d6a72", "deep": "#3d6200",
-              "night": "#141a1f"},
-    "dark": {"paper": "#0f1418", "ink": "#e6eff1", "green": "#76b900", "mute": "#a2b2b8", "deep": "#2f4d00",
-             "night": "#0f1418"},
+THEMES = {  # humanfia.ai's own: ink on a cool white, or white on a deep teal-black, with the site's
+    # five colours. `night` is the ink that reads on any of the colours, in either theme.
+    "light": {"paper": "#f4f8f9", "alt": "#e8f0f2", "ink": "#141a1f", "mute": "#5d6a72", "night": "#141a1f",
+              "green": "#76b900", "cyan": "#1fb3c7", "pink": "#ec6fa3", "lav": "#8b72d6", "gold": "#d9a440"},
+    "dark": {"paper": "#0f1418", "alt": "#172026", "ink": "#e8f0f2", "mute": "#82939a", "night": "#141a1f",
+             "green": "#76b900", "cyan": "#4fd8ea", "pink": "#ff94c2", "lav": "#b9a6f5", "gold": "#f2c862"},
 }
+ACCENTS = ("green", "cyan", "pink", "lav", "gold")
 BLOCK = "'Arial Black','Helvetica Neue',Helvetica,Arial,sans-serif"  # heavy block type
 SANS = "'Helvetica Neue',Helvetica,Arial,'Segoe UI',sans-serif"
 SLOPE = 1 / 3                       # the logo's one diagonal: one in three
@@ -309,12 +308,13 @@ class Facts:
     flows_href: str = "/flows/"
     projects: list[Project] = field(default_factory=list)
     results: list[Result] = field(default_factory=list)
-    posts: list[Post] = field(default_factory=list)
+    news: list[Post] = field(default_factory=list)
     people: list[Person] = field(default_factory=list)
     people_href: str = "/about/"
     people_intro: str = ""
     principles: list[str] = field(default_factory=list)
     contact: list[tuple[str, str]] = field(default_factory=list)  # (what for, href)
+    achievements: list[Achievement] = field(default_factory=list)   # from the ledger, newest first
 
 
 def sentences(s: str) -> list[str]:
@@ -428,12 +428,6 @@ def feed(path: str, kind: str) -> list[Post]:
     return posts
 
 
-def latest(n_: int = 5) -> list[Post]:
-    posts = feed("/news/feed.rss", "NEWS") + feed("/blog/feed.rss", "BLOG")
-    unique = {p.href: p for p in posts}.values()
-    return sorted(unique, key=lambda p: (-p.when, p.title))[:n_]
-
-
 def people_facts(f: Facts, nav: list[Menu]) -> None:
     """The roster on About (and on Team, while the site still has one), its principles and contacts."""
     seen: dict[str, Person] = {}
@@ -494,7 +488,7 @@ def gather() -> Facts:
         docs_facts(f, dom(docs))
     flow_facts(f, nav)
     project_facts(f, nav)
-    f.posts = latest()
+    f.news = feed("/news/feed.rss", "NEWS")
     people_facts(f, nav)
     return f
 
@@ -610,6 +604,12 @@ def fitsize(s: str, size: float, room: float, heavy: bool = True, least: float =
     return max(least, min(size, size * room / max(width(s, size, heavy), 1e-6)))
 
 
+def n(v: float) -> str:
+    """A number as an SVG attribute: two decimals at most, no trailing zeros."""
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
 def esc(s: str) -> str:
     return html.escape(s, quote=True)
 
@@ -643,58 +643,16 @@ class Sheet:
         a = f' text-anchor="{anchor}"' if anchor else ""
         return f'<text x="{n(x)}" y="{n(y)}" class="{kind}{n(size).replace(".", "_")} {ink}"{a}{extra}>{esc(s)}</text>'
 
-    def ball(self) -> str:
-        """The green ball's gradient: lit from the top left, like everything else here."""
-        if not any('id="ball"' in d for d in self.defs):
-            c = self.c
-            self.defs.append(f'<radialGradient id="ball" cx=".38" cy=".34" r=".72" fx=".3" fy=".26">'
-                             f'<stop offset="0" stop-color="{P.mix(c["green"], "#ffffff", .45)}"/>'
-                             f'<stop offset=".35" stop-color="{c["green"]}"/>'
-                             f'<stop offset="1" stop-color="{c["deep"]}"/></radialGradient>')
-        return "url(#ball)"
-
-    def grain(self) -> str:
-        """Print grain over the whole sheet: still, so it costs nothing after the first paint."""
-        r, g_, b = (int(self.c["ink"][i:i + 2], 16) / 255 for i in (1, 3, 5))
-        self.defs.append(f'<filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" '
-                         f'baseFrequency=".85" numOctaves="2" seed="11" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 {r:.3f} '
-                         f'0 0 0 0 {g_:.3f} 0 0 0 0 {b:.3f} 0 0 1.4 0 -.62"/></filter>')
-        return f'<rect width="{n(self.w)}" height="{n(self.h)}" filter="url(#grain)" opacity=".16"/>'
-
     def render(self, body: str) -> str:
         c = self.c
         fills = "".join(f".{k}{{fill:{v}}}" for k, v in c.items())
-        stroke = (f".hair{{fill:none;stroke:{c['ink']};stroke-width:1.5}}.wire{{fill:none;stroke:{c['ink']};stroke-width:3;"
-                  f"stroke-dasharray:10 8}}.greenwire{{fill:none;stroke:{c['green']};stroke-width:3}}"
-                  f".chip{{fill:{c['ink']};fill-opacity:.1}}.glyph{{fill:none;stroke:{c['ink']};stroke-width:13}}"
-                  f".glyphr{{fill:none;stroke:{c['green']};stroke-width:13}}")
+        stroke = f".glyph{{fill:none;stroke:{c['ink']};stroke-width:13}}"
         fonts = "".join(f".{k}{n(s).replace('.', '_')}{{{KINDS[k]};font-size:{n(s)}px}}" for k, s in sorted(self.sizes))
         calm = "@media (prefers-reduced-motion:reduce){*{animation:none!important}}"
         return (f'<svg xmlns="{SVG_NS}" viewBox="0 0 {n(self.w)} {n(self.h)}" width="{n(self.w)}" height="{n(self.h)}" '
                 f'role="img" aria-labelledby="t"><title id="t">{esc(self.title)}</title>'
                 f'<style>{fills}{stroke}{fonts}{"".join(self.css)}{calm}</style>'
                 f'<defs>{"".join(self.defs)}</defs><rect width="{n(self.w)}" height="{n(self.h)}" class="paper"/>{body}</svg>\n')
-
-
-def chips(sh: Sheet, x: float, y: float, items: list[tuple[str, str]], room: float, rows: int = 2,
-          hot: Callable[[str], bool] = lambda s: False, size: float = 14) -> tuple[str, float]:
-    """Labels on flat plates, wrapped into rows. Returns the svg and the y under the last row."""
-    out, cx, row = [], x, 0
-    for i, (name, note) in enumerate(items):
-        label = name + (f" · {note}" if note else "")
-        w = width(label, size, True) * 0.86 + 16
-        if cx + w > x + room:
-            row, cx = row + 1, x
-            if row >= rows:
-                out.append(sh.text(x + room - 4, y + (row - 1) * 30 + 19, f"+{len(items) - i}", size, "b", anchor="end"))
-                row -= 1
-                break
-        lit = hot(name)
-        yy = y + row * 30
-        out.append(f'<rect x="{n(cx)}" y="{n(yy)}" width="{n(w)}" height="24" class="{"green" if lit else "chip"}"/>'
-                   + sh.text(cx + 8, yy + 17, label, size, "b", "night" if lit else "ink"))
-        cx += w + 6
-    return "".join(out), y + (row + 1) * 30
 
 
 # ------------------------------------------------------------------------------------- wordmark
@@ -740,31 +698,126 @@ def wordmark(x0: float, base: float, k: float, cls: str = "glyph") -> tuple[str,
             dot, width_)
 
 
+
+
+# --------------------------------------------------------------------------------- achievements
+
+# Every news post on humanfia.ai announces a result, and the home page's tiles feature some of them.
+# The ledger, profile/achievements.json, remembers every one this profile has seen: each run adds
+# what is new, keeps what the site has merely stopped featuring, and drops only a post that is gone.
+
+LEDGER = PROFILE / "achievements.json"
+FRESH_DAYS = 14  # how long an achievement is announced as new, from the day it was published
+
+_NUM = re.compile(r"(?<![\w.])(#\d[\d,]*|[+-]?\d[\d,]*(?:\.\d+)?(?:%|×|\+)?(?:/\d[\d,]*)?)(?=[\s,:;)]|$)")
+
+
+@dataclass
+class Achievement:
+    href: str                                  # its post, as a path on the site
+    num: str                                   # the number it is about: "6/6", "78.2%", "#1", or ""
+    label: str
+    date: str = ""                             # the ISO day it was published, or first seen
+    added: str = ""                            # the ISO day this profile first saw it
+    featured: int = -1                         # its place among the home page's tiles; -1 if not there
+
+    def record(self) -> dict[str, str]:
+        return {"href": self.href, "num": self.num, "label": self.label, "date": self.date, "added": self.added}
+
+
+def headline_number(title: str) -> tuple[str, str]:
+    """A news title's headline number and what it is about: "78.2% MLE-bench medal rate in 6 hours"
+    -> ("78.2%", "MLE-bench medal rate in 6 hours"). After an arrow, the number it arrives at; a
+    number inside the title leaves the title whole."""
+    _, arrow, after = title.rpartition("→")
+    m = _NUM.search(after if arrow else title)
+    if not m:
+        return "", title
+    if not arrow and m.start() == 0 and title[m.end():].strip(" ,:;"):
+        return m.group(1), title[m.end():].strip(" ,:;")
+    return m.group(1), title
+
+
+def path_of(href: str) -> str:
+    p = re.sub(r"^https?://[^/]+", "", href).split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    return p or "/"
+
+
+def load_ledger(path: Path = LEDGER) -> list[dict[str, str]]:
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except ValueError:
+        sys.exit(f"gen_portfolio: {path.name} is not JSON; leaving the profile as it is")
+    return [r for r in rows if isinstance(r, dict) and r.get("href")]
+
+
+def achievements(f: Facts, old: list[dict[str, str]], today: dt.date,
+                 exists: Callable[[str], bool]) -> list[Achievement]:
+    """Every achievement the site announces now -- each news post, and each tile on the home page,
+    whose words win -- plus those it announced before and still publishes. Newest first."""
+    now: dict[str, Achievement] = {}
+    for p in f.news:
+        num, label = headline_number(p.title)
+        now[path_of(p.href)] = Achievement(path_of(p.href), num, label,
+                                           dt.datetime.fromtimestamp(p.when, dt.timezone.utc).date().isoformat())
+    for i, r in enumerate(f.results):
+        key = path_of(r.href) if r.href else "#" + r.label
+        a = now.setdefault(key, Achievement(key, "", ""))
+        a.num, a.label, a.featured = r.num, r.label, i
+    prior = {r["href"]: r for r in old}
+    out = []
+    for key, a in now.items():
+        was = prior.get(key, {})
+        a.added = was.get("added") or today.isoformat()
+        a.date = a.date or was.get("date") or a.added
+        out.append(a)
+    for key, was in prior.items():
+        if key not in now and key.startswith("/") and exists(key):
+            out.append(Achievement(key, was.get("num", ""), was.get("label", ""), was.get("date", ""), was.get("added", "")))
+    return sorted(out, key=lambda a: (a.date, a.href), reverse=True)
+
+
+def save_ledger(items: list[Achievement], path: Path = LEDGER) -> None:
+    path.write_text(json.dumps([a.record() for a in items], ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+def fresh(a: Achievement, today: dt.date) -> bool:
+    try:
+        return dt.date.fromisoformat(a.date) >= today - dt.timedelta(days=FRESH_DAYS)
+    except ValueError:
+        return False
+
+
+def lineup(items: list[Achievement], today: dt.date) -> list[Achievement]:
+    """The order of the broadcast: what is new, then what the home page features, then the rest."""
+    new = [a for a in items if fresh(a, today)]
+    feat = sorted((a for a in items if a.featured >= 0 and a not in new), key=lambda a: a.featured)
+    return new + feat + [a for a in items if a not in new and a not in feat]
+
+
 # ------------------------------------------------------------------------------------- the spot
 
-# The banner is cut like a commercial, not paged like a deck: about fifty shots of one to three
-# seconds, each with one idea set big, each moving from its first frame to its last, cut on the
-# beat with whips, punches, irises and zooms through the type. The green ball is the one actor all
-# the way through: it drops, swells into a green frame, shrinks into the logo's slot, becomes the
-# headline's full stop, falls through the runtime, and drops home at the end.
+# One minute, cut on the beat, in flat planes: discs, wedges, bars on the logo's one-in-three
+# diagonal, block capitals, and the site's five colours. Words are kept to names and numbers;
+# everything else is said by things moving. The green ball -- the dot of the H -- is the one actor
+# all the way through.
 
 W, H = 1000.0, 560.0       # the frame; shown ~830 px wide on GitHub
-BALL = 34.0                # the ball's radius, most of the time
+BALL = 30.0                # the ball's radius, most of the time
+HEIGHT_H = 300.0           # the H, as #hshape is drawn
 
 
-def swing(u: float, yaw: float = 38.0, pitch: float = -14.0) -> P.Mat:
-    """The mark's slow turn: a figure of eight of yaw and pitch, back where it began after one loop."""
-    return P.rot(yaw * math.sin(2 * math.pi * u), pitch + 8 * math.sin(4 * math.pi * u), -2 * math.sin(2 * math.pi * u))
-
-
-def mark_defs(sh: Sheet, logo: Logo, height: float) -> tuple[float, tuple[float, float, float]]:
-    """The H, centred on the origin at the given height, as #hshape. Returns its scale and the dot's
-    place (x, y, r) relative to the centre."""
+def mark_defs(sh: Sheet, logo: Logo) -> tuple[float, float, float]:
+    """The H, centred on the origin, HEIGHT_H tall, as #hshape (once). Returns the dot's place
+    (x, y, r) relative to the centre."""
     vx, vy, vw, vh = logo.viewbox
-    s = height / vh
-    sh.defs.append(f'<g id="hshape" transform="scale({n(s)}) translate({n(-vx - vw / 2)} {n(-vy - vh / 2)})">{logo.body}</g>')
+    s = HEIGHT_H / vh
+    if not any('id="hshape"' in d for d in sh.defs):
+        sh.defs.append(f'<g id="hshape" transform="scale({n(s)}) translate({n(-vx - vw / 2)} {n(-vy - vh / 2)})">{logo.body}</g>')
     dx, dy, dr = logo.dot if logo.dot else (vx + vw * 0.875, vy + vh * 0.11, vw * 0.125)
-    return s, ((dx - vx - vw / 2) * s, (dy - vy - vh / 2) * s, dr * s)
+    return (dx - vx - vw / 2) * s, (dy - vy - vh / 2) * s, dr * s
 
 
 def _lerp(a, b, u):  # numbers or tuples
@@ -804,6 +857,7 @@ class Film:
         self.c = self.sh.c
         self.ball_keys: list[tuple[float, tuple[float, float, float]]] = []
         self.ball_on: list[tuple[float, float]] = []
+        self.ball_ink: tuple[float, float] | None = None   # when the ball is night, not green
 
     def uid(self, p: str = "u") -> str:
         return self.sh.uid(p)
@@ -835,9 +889,6 @@ class Film:
             return self.anim("display", [(0, "inline"), (t1, "none")], True)
         return self.anim("display", [(0, "none"), (t0, "inline"), (t1, "none")], True)
 
-    def fade(self, t0: float, t1: float, d: float = 0.12) -> str:
-        return self.anim("opacity", [(0, 0), *tween(t0, d, 0.0, 1.0, "lin", 2), *tween(t1 - d, d, 1.0, 0.0, "lin", 2)])
-
     def at(self, x: float, y: float, inner: str, *anims: str) -> str:
         """Content whose animated transforms (scale, rotate) act about the point (x, y)."""
         return f'<g transform="translate({n(x)} {n(y)})">' + "".join(f"<g>{a}" for a in anims) + inner + "</g>" * len(anims) + "</g>"
@@ -853,12 +904,11 @@ class Film:
     def drift(self, t0: float, t1: float, dx: float, dy: float = 0.0) -> str:
         return self.tf("translate", [(0, (0.0, 0.0)), (t0, (0.0, 0.0)), (t1, (dx, dy))])
 
-    def reveal(self, t: float, x: float, y: float, w: float, h: float, inner: str, d: float = 0.4) -> str:
-        """Content uncovered left to right, as if typed out at speed."""
-        cid = self.uid("clip")
-        return (f'<clipPath id="{cid}"><rect x="{n(x)}" y="{n(y)}" height="{n(h)}" width="0">'
-                f'{self.anim("width", [(0, 0), *tween(t, d, 0.0, w, "out", 6)])}</rect></clipPath>'
-                f'<g clip-path="url(#{cid})">{inner}</g>')
+    def spin(self, t0: float, t1: float, a0: float, a1: float) -> str:
+        return self.tf("rotate", [(0, a0), (t0, a0), (t1, a1)])
+
+    def grow(self, attr: str, t: float, a: float, b: float, d: float = 0.4, ease: str = "out") -> str:
+        return self.anim(attr, [(0, a), *tween(t, d, a, b, ease, 6)])
 
     def text(self, x: float, y: float, s: str, size: float, kind: str = "k", ink: str = "ink", anchor: str = "",
              extra: str = "") -> str:
@@ -873,25 +923,13 @@ class Film:
         return f'<rect x="-40" y="-40" width="{n(W + 80)}" height="{n(H + 80)}" class="{ink}"/>'
 
 
-def flip(ink: str) -> str:
-    """The ink that reads on a ground: paper on ink, ink on paper, night on the green."""
-    return {"paper": "ink", "green": "night"}.get(ink, "paper")
+def flip(ground: str) -> str:
+    """The ink that reads on a ground: paper on ink, ink on paper, night on a colour."""
+    return {"paper": "ink", "alt": "ink", "ink": "paper"}.get(ground, "night")
 
 
-def blockword(F: Film, x: float, y: float, s: str, size: float, t: float, front: str = "ink",
-              side: tuple[str, str] | None = None, depth: int = 9, step: float = 1.7, anchor: str = "",
-              length: float = 0.0) -> str:
-    """Block capitals pushed back into a solid, the way a constructivist poster cuts its slogans:
-    the copies behind slide out to their depth at t, so the letters thicken as they land."""
-    side = side or (F.c["green"], F.c["deep"])
-    fit_ = f' textLength="{n(length)}" lengthAdjust="spacingAndGlyphs"' if length else ""
-    out = []
-    for k in range(depth, 0, -1):
-        col = P.mix(side[0], side[1], k / depth)
-        mv = F.tf("translate", [(0, (0.0, 0.0)), *tween(t, 0.4, (0.0, 0.0), (k * step, k * step), "out", 5)])
-        out.append(f"<g>{mv}" + F.text(x, y, s, size, "k", front, anchor, f' style="fill:{col}"{fit_}') + "</g>")
-    out.append(F.text(x, y, s, size, "k", front, anchor, fit_))
-    return "".join(out)
+def accent(i: int) -> str:
+    return ACCENTS[i % len(ACCENTS)]
 
 
 def capw(s: str, size: float) -> float:
@@ -910,10 +948,19 @@ def fitlines(s: str, room: float, most: float, least: float, lines: int) -> tupl
     return least, wrap(s, least, room / 0.9, lines, True)
 
 
+def slam(F: Film, t: float, x: float, base: float, s: str, size: float, ink: str, k0: float = 2.2) -> str:
+    """Block capitals slammed down from large, about their own middle."""
+    ww = capw(s, size)
+    body = F.text(0, 0, s, size, "k", ink, extra=f' textLength="{n(ww)}" lengthAdjust="spacingAndGlyphs"')
+    return F.at(x + ww / 2, base - size * 0.35, f'<g transform="translate({n(-ww / 2)} {n(size * 0.35)})">{body}</g>',
+                F.tf("scale", [(0, (k0, k0)), *tween(t, 0.3, (k0, k0), (1.0, 1.0), "back", 6)]),
+                F.anim("opacity", [(0, 0), (t, 0), (t + 0.05, 1)]))
+
+
 def words_in(F: Film, t: float, x: float, y: float, lines: list[str], size: float, ink: str = "ink",
              lead: float = 1.08, gap: float = 0.09, hot: Callable[[str], bool] = lambda w: False) -> tuple[str, float, float]:
-    """Lines of block capitals, word by word, each slammed down from large. Returns the svg and
-    where the last word ends (x, baseline)."""
+    """Lines of block capitals, word by word, each slammed down. A hot word lands on a green plate.
+    Returns the svg and where the last word ends (x, baseline)."""
     out, k, end = [], 0, (x, y)
     for j, line in enumerate(lines):
         cx = x
@@ -921,18 +968,56 @@ def words_in(F: Film, t: float, x: float, y: float, lines: list[str], size: floa
         for w_ in line.split():
             ww = capw(w_, size)
             ti = t + gap * k
-            body = ""
             if hot(w_):
-                body += (f'<rect x="{n(-8)}" y="{n(-size * 0.86)}" width="{n(ww + 16)}" height="{n(size * 1.04)}" class="green">'
-                         f'{F.anim("width", [(0, 0), *tween(ti, 0.25, 0.0, ww + 16, "out", 4)])}</rect>')
-            body += F.text(0, 0, w_, size, "k", "night" if hot(w_) else ink, extra=f' textLength="{n(ww)}" lengthAdjust="spacingAndGlyphs"')
-            out.append(F.at(cx, by, F.at(ww / 2, -size * 0.35, f'<g transform="translate({n(-ww / 2)} {n(size * 0.35)})">{body}</g>',
-                                         F.tf("scale", [(0, (2.4, 2.4)), *tween(ti, 0.3, (2.4, 2.4), (1.0, 1.0), "back", 6)])),
-                            F.anim("opacity", [(0, 0), (ti, 0), (ti + 0.05, 1)])))
+                out.append(f'<rect x="{n(cx - 8)}" y="{n(by - size * 0.86)}" width="0" height="{n(size * 1.04)}" class="green">'
+                           f'{F.grow("width", ti, 0.0, ww + 16, 0.25)}</rect>')
+            out.append(slam(F, ti, cx, by, w_, size, "night" if hot(w_) else ink, 2.4))
             end = (cx + ww, by)
             cx += ww + size * 0.28
             k += 1
     return "".join(out), end[0], end[1]
+
+
+def odo(F: Film, x: float, base: float, s: str, size: float, ink: str, t: float) -> tuple[str, float]:
+    """Digits that spin into place like a mechanical counter, from t; anything else springs up.
+    Returns the svg and its width."""
+    adv = size * 0.74
+    cid = F.uid("odo")
+    wide = sum(adv * (0.45 if ch in ".,:" else 1.0) for ch in s)
+    line = size * 1.2
+    out = [f'<clipPath id="{cid}"><rect x="{n(x - 10)}" y="{n(base - size * 0.95)}" width="{n(wide + 20)}" height="{n(size * 1.2)}"/></clipPath>',
+           f'<g clip-path="url(#{cid})">']
+    cx, k = x, 0
+    for ch in s:
+        w = adv * (0.45 if ch in ".,:" else 1.0)
+        if ch.isdigit():
+            land = 10 + int(ch)
+            strip = "".join(F.text(cx + w / 2, base + line * i, str(i % 10), size, "k", ink, "middle") for i in range(land + 1))
+            ti = t + 0.05 * k
+            out.append(f'<g>{F.tf("translate", [(0, (0.0, 0.0)), *tween(ti, 0.55 + 0.06 * k, (0.0, 0.0), (0.0, -line * land), "out", 8)])}{strip}</g>')
+            k += 1
+        else:
+            out.append(F.pop(t + 0.35, cx + w / 2, base, F.text(0, 0, ch, size, "k", ink, "middle"), 0.2, 0.3))
+        cx += w
+    out.append("</g>")
+    return "".join(out), wide
+
+
+def disc(cx: float, cy: float, r: float, cls: str, extra: str = "") -> str:
+    return f'<circle cx="{n(cx)}" cy="{n(cy)}" r="{n(r)}" class="{cls}"{extra}/>'
+
+
+def bar(x: float, y: float, w: float, h: float, cls: str, extra: str = "") -> str:
+    return f'<rect x="{n(x)}" y="{n(y)}" width="{n(w)}" height="{n(h)}" class="{cls}"{extra}/>'
+
+
+def tilt(x: float, y: float, inner: str, a: float = -ANGLE) -> str:
+    """On the logo's diagonal, about (x, y)."""
+    return f'<g transform="translate({n(x)} {n(y)}) rotate({n(a)})">{inner}</g>'
+
+
+def ring(cx: float, cy: float, r: float, stroke: float, color: str, extra: str = "") -> str:
+    return f'<circle cx="{n(cx)}" cy="{n(cy)}" r="{n(r)}" fill="none" stroke="{color}" stroke-width="{n(stroke)}"{extra}/>'
 
 
 # ------------------------------------------------------------------------------------- the shots
@@ -948,308 +1033,155 @@ class Shot:
     enter: str = "cut"     # cut | whip | punch | rise
 
 
-def shot_drop(F: Film, t0: float, t1: float) -> str:
-    """Ink. The ball drops in, bounces, the bars slam round it -- then it swells to fill the frame."""
+def shot_open(F: Film, t0: float, t1: float) -> str:
+    """Beat the whites with the wedge: an ink disc swells, a pink wedge drives into it, bars fly in
+    on the diagonal, and the ball drops into the disc's heart -- then swells to fill the frame."""
     c = F.c
-    out = [F.bg("ink")]
-    for i, (x, y, w, h) in enumerate(((140, 120, 760, 22), (60, 420, 520, 60), (620, 470, 420, 14), (720, 80, 300, 40))):
-        ti = t0 + 0.55 + 0.07 * i
-        bar = f'<rect x="{n(-w / 2)}" y="{n(-h / 2)}" width="{n(w)}" height="{n(h)}" class="{"green" if i == 1 else "paper"}"/>'
-        dx = -1300 if i % 2 else 1300
-        out.append(f'<g transform="translate({n(x + w / 2)} {n(y)}) rotate({n(-ANGLE)})"><g>'
-                   f'{F.tf("translate", [(0, (dx, 0.0)), *tween(ti, 0.3, (dx, 0.0), (0.0, 0.0), "back", 6)])}{bar}</g></g>')
-    out.append(f'<circle cx="500" cy="300" r="140" class="hair" style="stroke:{c["paper"]}" opacity="0">'
-               f'{F.anim("r", [(0, 40), *tween(t0 + 0.5, 0.5, 40.0, 320.0, "out", 5)])}'
-               f'{F.anim("opacity", [(0, 0), (t0 + 0.5, 0), (t0 + 0.5, 0.8), (t0 + 1.0, 0)])}</circle>')
-    if F.f.kicker:
-        k = F.f.kicker.upper()
-        kw = tracked(k, 18)
-        out.append(F.reveal(t0 + 1.0, 500 - kw / 2, 520, kw + 4, 40, F.text(500, 545, k, 18, "t", "paper", "middle"), 0.5))
-    land = 300 - BALL
-    F.ball([(t0, 500, -60, BALL), *[(t, 500, y, BALL) for t, y in tween(t0, 0.5, -60.0, land, "in", 5)][1:],
-            *[(t, 500, y, BALL) for t, y in tween(t0 + 0.5, 0.22, land, land - 70, "out", 4)][1:],
-            *[(t, 500, y, BALL) for t, y in tween(t0 + 0.72, 0.2, land - 70, land, "in", 4)][1:],
-            (t1 - 0.42, 500, land, BALL),
-            *[(t, 500, land, r) for t, r in tween(t1 - 0.42, 0.42, BALL, 1250.0, "in", 6)][1:]])
+    out = [F.bg("paper")]
+    out.append(F.at(690, 290, disc(0, 0, 210, "ink") + bar(-210, -9, 420, 18, "paper"),
+                    F.tf("scale", [(0, (0.0, 0.0)), *tween(t0 + 0.05, 0.45, (0.0, 0.0), (1.0, 1.0), "back", 6)]),
+                    F.spin(t0 + 0.5, t1, 0.0, 70.0)))
+    wedge = f'<polygon points="0,-70 560,0 0,70" class="pink"/>'
+    out.append(tilt(130, 450, f'<g>{F.tf("translate", [(0, (-900.0, 0.0)), (t0 + 0.4, (-900.0, 0.0)), *tween(t0 + 0.4, 0.35, (-900.0, 0.0), (0.0, 0.0), "in", 5)[1:], *tween(t0 + 0.75, 0.25, (-30.0, 0.0), (0.0, 0.0), "back", 4)])}{wedge}</g>'))
+    for i, (x, y, w, h, cls, dx) in enumerate(((40, 120, 620, 16, "cyan", 1400), (380, 470, 600, 30, "green", -1400),
+                                                (60, 500, 260, 8, "ink", 1400), (560, 70, 380, 8, "gold", -1400))):
+        ti = t0 + 0.25 + 0.08 * i
+        out.append(tilt(x + w / 2, y, f'<g>{F.slide(ti, dx, 0, 0.32, "back")}{bar(-w / 2, -h / 2, w, h, cls)}</g>'))
+    out.append(F.at(170, 220, bar(-50, -50, 100, 100, "lav"),
+                    F.tf("rotate", [(0, -90.0), *tween(t0 + 0.6, 0.5, -90.0, ANGLE, "back", 6), (t1, ANGLE + 30)]),
+                    F.tf("scale", [(0, (0.0, 0.0)), *tween(t0 + 0.6, 0.35, (0.0, 0.0), (1.0, 1.0), "back", 5)])))
+    for k in range(3):
+        out.append(f'<rect x="90" y="{n(300 + 22 * k)}" width="0" height="8" class="ink">{F.grow("width", t0 + 0.9 + 0.08 * k, 0.0, 200.0 - 50 * k, 0.35)}</rect>')
+    out.append(ring(690, 290, 260, 2, c["ink"], f' stroke-dasharray="4 10" opacity=".5"'))
+    land = 290.0
+    F.ball([(t0 + 0.9, 690, -60, BALL), *[(t, 690, y, BALL) for t, y in tween(t0 + 0.9, 0.45, -60.0, land, "in", 5)][1:],
+            *[(t, 690, land, r) for t, r in tween(t0 + 1.35, 0.25, BALL * 1.3, BALL, "back", 3)],
+            (t1 - 0.4, 690, land, BALL), *[(t, 690, land, r) for t, r in tween(t1 - 0.4, 0.4, BALL, 1300.0, "in", 6)][1:]])
     return "".join(out)
 
 
-HEIGHT_H = 300.0
-
-
 def shot_mark(F: Film, t0: float, t1: float) -> str:
-    """The green frame shrinks into the H's slot; the H, a slab, turns; the wordmark draws itself;
-    the ball hops over to dot the i."""
-    c = F.c
+    """The green frame shrinks into the H's slot; planes slide in behind it; the wordmark draws
+    itself, stroke by stroke; the ball hops over to dot the i."""
     hx, hy = 270.0, 280.0
-    _, (sx, sy, sr) = mark_defs(F.sh, F.f.logo, HEIGHT_H)
-    Ts = 12.0
-    frames = [swing(u, 34, -12) for u in P.loop_frames(60)]
-    css, slab = P.extrude("hx", "hshape", frames, Ts, (0, 0), HEIGHT_H * 0.3, 26, (c["green"], c["deep"]), "ink")
-    F.sh.css.append(css)
+    sx, sy, sr = mark_defs(F.sh, F.f.logo)
     out = [F.bg("paper")]
-    out.append(f'<g><polygon points="{n(W)},0 {n(W)},300 {n(W - 380)},0" class="green"/>{F.slide(t0 + 0.3, 420, -140, 0.4)}</g>')
-    out.append(f'<circle cx="840" cy="110" r="230" class="hair" stroke-dasharray="3 9" opacity=".6">'
-               f'<animateTransform attributeName="transform" type="rotate" dur="30s" repeatCount="indefinite" values="0 840 110;360 840 110"/></circle>')
-    out.append(F.at(hx, hy, slab, F.tf("scale", [(0, (0.5, 0.5)), *tween(t0, 0.45, (0.5, 0.5), (1.0, 1.0), "back", 6)])))
-    # The wordmark, drawn stroke by stroke.
+    out.append(f'<g>{F.slide(t0 + 0.2, 0, -700, 0.4, "back")}{bar(440, -20, 36, 400, "green")}</g>')
+    out.append(f'<g>{F.slide(t0 + 0.3, -500, 0, 0.4, "back")}{bar(60, 60, 150, 150, "cyan")}</g>')
+    out.append(f'<g>{F.slide(t0 + 0.4, 0, 400, 0.4, "back")}{disc(880, 470, 120, "pink")}</g>')
+    out.append(tilt(700, 420, f'<rect x="-260" y="-5" width="0" height="10" class="gold">{F.grow("width", t0 + 0.9, 0.0, 520.0, 0.5)}</rect>'))
+    out.append(F.at(hx, hy, '<use href="#hshape" class="ink"/>',
+                    F.tf("scale", [(0, (0.6, 0.6)), *tween(t0, 0.45, (0.6, 0.6), (1.0, 1.0), "back", 6)])))
     x0, base, k = 520.0, 330.0, 1.06
     paths, xx, dot = [], 0.0, (0.0, 0.0, 0.0)
     for i, (d, w) in enumerate(_glyphs()):
-        ti = t0 + 0.7 + 0.11 * i
+        ti = t0 + 0.6 + 0.1 * i
         paths.append(f'<path transform="translate({n(xx)} 0)" d="{d}" pathLength="1" stroke-dasharray="1 1">'
                      f'{F.anim("stroke-dashoffset", [(0, 1), *tween(ti, 0.4, 1.0, 0.0, "out", 4)])}</path>')
         if i == 6:
             dot = (x0 + (xx + _H) * k, base - (XH + 10 + S * 0.62) * k, S * 0.62 * k)
         xx += w + 8
     out.append(f'<g transform="translate({n(x0)} {n(base)}) scale({n(k)})" class="glyph">{"".join(paths)}</g>')
-    if F.f.kicker:
-        kk = F.f.kicker.upper()
-        out.append(f'<g>{F.slide(t0 + 1.6, 700, 0, 0.35)}<rect x="{n(x0)}" y="372" width="{n(tracked(kk, 16) + 24)}" height="32" class="green"/>'
-                   + F.text(x0 + 14, 394, kk, 16, "t", "night") + "</g>")
-
-    def slot(t: float) -> tuple[float, float]:
-        m = swing(((t - t0) / Ts) % 1.0, 34, -12)
-        x, y, _ = P.apply(m, (sx, sy, 10.0))
-        return hx + x, hy + y
-
-    land = t0 + 0.5
-    pts = [(t, *_lerp((500.0, 300.0 - BALL, 1250.0), (*slot(land), sr), u)) for t, u in tween(t0, 0.5, 0.0, 1.0, "io", 6)]
-    t = land
-    while t < t0 + 2.6:
-        t += 0.12
-        pts.append((t, *slot(t), sr))
-    a = (*slot(t), sr)
+    slot = (hx + sx, hy + sy, sr)
+    hop = t0 + 1.9
+    pts = [(t, *_lerp((690.0, 290.0, 1300.0), slot, u)) for t, u in tween(t0, 0.5, 0.0, 1.0, "io", 6)]
+    pts.append((hop, *slot))
     for i in range(1, 9):
         u = i / 8
         e = EASE["io"](u)
-        pts.append((t + 0.55 * u, a[0] + (dot[0] - a[0]) * e, a[1] + (dot[1] - a[1]) * e - 120 * math.sin(math.pi * u), sr + (dot[2] - sr) * e))
-    pts.append((t1 - 0.05, dot[0], dot[1], dot[2]))
+        pts.append((hop + 0.55 * u, slot[0] + (dot[0] - slot[0]) * e, slot[1] + (dot[1] - slot[1]) * e - 130 * math.sin(math.pi * u),
+                    slot[2] + (dot[2] - slot[2]) * e))
+    pts.append((t1 - 0.02, *dot))
     F.ball(pts)
     return "".join(out)
 
 
 def shot_headline(F: Film, t0: float, t1: float) -> str:
-    """The headline, a word at a time, slammed down; the ball lands as its full stop, then swells."""
+    """The headline, a word at a time, slammed down; the ball lands as its full stop."""
     head = F.f.headline.upper().rstrip(".")
-    size, lines = fitlines(head, 880, 92, 40, 3)
+    size, lines = fitlines(head, 860, 96, 40, 3)
     top = (H - size * 1.08 * len(lines)) / 2 + size * 0.8
+    out = [F.bg("paper"),
+           F.at(W, H, disc(0, 0, 300, "pink") + bar(-300, -12, 300, 24, "paper"),
+                F.tf("scale", [(0, (0.0, 0.0)), *tween(t0, 0.5, (0.0, 0.0), (1.0, 1.0), "back", 6)]), F.spin(t0, t1, 0.0, -50.0)),
+           f'<g>{F.slide(t0 + 0.1, 0, -300, 0.35, "back")}{bar(60, 0, 18, top - size * 0.95, "cyan")}</g>']
     body, ex, ey = words_in(F, t0 + 0.15, 60, top, lines, size, hot=lambda w: w.startswith("FLOW"))
-    out = [F.bg("paper"), f'<rect x="60" y="{n(top + size * 1.08 * (len(lines) - 1) + size * 0.4)}" height="12" class="ink">'
-                          f'{F.anim("width", [(0, 0), *tween(t0 + 0.9, 0.4, 0.0, 300.0, "out", 4)])}</rect>', body]
-    if F.f.lead:
-        ll = wrap(F.f.lead, 19, 600, 2)
-        out.append(f'<g opacity="0">{F.anim("opacity", [(0, 0), (t0 + 1.2, 0), (t0 + 1.5, 1)])}'
-                   + "".join(F.text(60 + 320, top + size * 1.08 * (len(lines) - 1) + size * 0.55 + 22 * j, ln, 19, "r", "mute")
-                             for j, ln in enumerate(ll)) + "</g>")
+    out.append(body)
+    out.append(f'<rect x="60" y="{n(ey + size * 0.3)}" width="0" height="12" class="ink">{F.grow("width", t0 + 0.9, 0.0, 300.0)}</rect>')
     nwords = sum(len(ln.split()) for ln in lines)
     r = size * 0.16
     bx, by = ex + r * 1.6, ey - r
     tl = t0 + 0.15 + 0.09 * nwords + 0.25
     F.ball([(tl - 0.3, bx, -60, r), *[(t, bx, y, r) for t, y in tween(tl - 0.3, 0.3, -60.0, by, "in", 5)][1:],
-            *[(t, bx, by, rr) for t, rr in tween(tl, 0.16, r, r * 1.25, "out", 2)][1:],
-            *[(t, bx, by, rr) for t, rr in tween(tl + 0.16, 0.2, r * 1.25, r, "back", 3)][1:],
-            (t1 - 0.4, bx, by, r), *[(t, x, y, rr) for t, (x, y, rr) in tween(t1 - 0.4, 0.4, (bx, by, r), (500.0, 280.0, 1250.0), "in", 6)][1:]])
+            *[(t, bx, by, rr) for t, rr in tween(tl, 0.16, r, r * 1.3, "out", 2)][1:],
+            *[(t, bx, by, rr) for t, rr in tween(tl + 0.16, 0.2, r * 1.3, r, "back", 3)][1:], (t1, bx, by, r)])
     return "".join(out)
 
 
-def shot_act(i: int, act: str, last: bool) -> Draw:
-    """One line of the manifesto, filling the frame, on its own composition."""
-    def draw(F: Film, t0: float, t1: float) -> str:
-        ground = ("green", "paper", "ink")[i % 3]
-        ink = flip(ground)
-        out = [F.bg(ground)]
-        if ground == "green":
-            disc = (f'<circle r="230" class="ink"/><rect x="-230" y="-14" width="460" height="28" class="green"/>')
-            out.append(F.at(800, 140, disc, F.tf("rotate", [(0, 0.0), (t0, 0.0), (t1, 60.0)]),
-                            F.tf("scale", [(0, (0.0, 0.0)), *tween(t0, 0.4, (0.0, 0.0), (1.0, 1.0), "back", 6)])))
-        elif ground == "paper":
-            band = f'<rect x="-700" y="-70" width="1400" height="140" class="green"/>'
-            out.append(f'<g transform="translate(500 300) rotate({n(-ANGLE)})"><g>{F.slide(t0, 1400, 0, 0.35)}{F.drift(t0 + 0.35, t1, -60)}{band}</g></g>')
-            ink = "ink"
-        else:
-            out.append(f'<g>{F.slide(t0 + 0.05, -500, 300, 0.35, "back")}<polygon points="0,{n(H)} 0,{n(H - 330)} 520,{n(H)}" class="green"/></g>')
-        size, lines = fitlines(act.upper(), 860, 104, 44, 3)
-        top = (H - size * 1.06 * len(lines)) / 2 + size * 0.8
-        body, ex, ey = words_in(F, t0 + 0.12, 70, top, lines, size, ink, 1.06, 0.07)
-        out.append(f"<g>{F.drift(t0 + 0.4, t1, -26)}{body}</g>")
-        if last:
-            F.ball([(t1 - 0.9, ex + 30, ey - 26, 0.0), *[(t, ex + 30, ey - 26, r) for t, r in tween(t1 - 0.9, 0.3, 0.0, 22.0, "back", 4)][1:], (t1, ex + 30, ey - 26, 22)])
-        return "".join(out)
-    return draw
-
-
-def shot_bumper(num: int, title: str) -> Draw:
-    """A section's name, springing up, then the camera flies through it into the dark."""
+def shot_wipe(num: int, title: str, ground: str) -> Draw:
+    """A section's name: a colour floods in on the diagonal, the word slams down on it."""
     def draw(F: Film, t0: float, t1: float) -> str:
         word = title.upper()
-        size = min(190.0, 900 / max(capw(word, 1), 1e-6))
+        size = min(170.0, 860 / max(capw(word, 1), 1e-6))
         ww = capw(word, size)
-        inner = (f'<g transform="translate({n(-ww / 2)} {n(size * 0.35)})">'
-                 + blockword(F, 0, 0, word, size, t0 + 0.2, length=ww) + "</g>")
-        grow = F.tf("scale", [(0, (0.3, 0.3)), *tween(t0, 0.35, (0.3, 0.3), (1.0, 1.0), "back", 6),
-                              (t1 - 0.4, (1.08, 1.08)), *tween(t1 - 0.4, 0.4, (1.08, 1.08), (16.0, 16.0), "in", 6)[1:]])
-        out = [F.bg("paper"),
-               f'<rect x="0" y="{n(H / 2 - 4)}" height="8" class="green">{F.anim("width", [(0, 0), *tween(t0, 0.5, 0.0, W, "out", 5)])}</rect>',
-               F.at(W / 2, H / 2, inner, grow),
-               f'<g>{F.slide(t0 + 0.15, 0, -120, 0.3)}<rect x="40" y="40" width="70" height="70" class="green"/>'
-               + F.text(75, 90, f"{num:02d}", 34, "k", "night", "middle") + "</g>",
-               f'<rect width="{n(W)}" height="{n(H)}" class="ink" opacity="0">{F.anim("opacity", [(0, 0), (t1 - 0.14, 0), (t1, 1)])}</rect>']
+        out = [F.bg(ground),
+               tilt(W / 2, H - 70, f'<g>{F.slide(t0, -1500, 0, 0.35)}{bar(-800, -36, 1600, 72, "ink")}</g>', -ANGLE / 2),
+               slam(F, t0 + 0.12, (W - ww) / 2, H / 2 + size * 0.35, word, size, "night", 2.6),
+               f'<g>{F.slide(t0 + 0.2, 0, -160, 0.3, "back")}{bar(40, 40, 64, 64, "ink")}'
+               + F.text(72, 85, f"{num:02d}", 30, "k", "paper", "middle") + "</g>",
+               F.at(900, 470, disc(0, 0, 50, "paper"), F.tf("scale", [(0, (0.0, 0.0)), *tween(t0 + 0.3, 0.3, (0.0, 0.0), (1.0, 1.0), "back", 5)]))]
         return "".join(out)
     return draw
 
 
-def shot_humanize(F: Film, t0: float, t1: float) -> str:
-    """The runtime's name, cut deep, and what it does."""
-    band = next((b for b in F.f.bands if b.title.lower() == "humanize"), F.f.bands[0])
-    word = band.title.upper()
-    size = min(170.0, 880 / capw(word, 1))
-    ww = capw(word, size)
-    out = [F.bg("paper"), f'<g>{F.slide(t0, 0, -400, 0.4, "back")}<rect x="60" y="0" width="40" height="230" class="green"/></g>',
-           F.pop(t0 + 0.05, 60 + ww / 2, 290, f'<g transform="translate({n(-ww / 2)} 0)">' + blockword(F, 0, 0, word, size, t0 + 0.3, length=ww) + "</g>", 0.6),
-           f'<rect x="60" y="322" height="10" class="green">{F.anim("width", [(0, 0), *tween(t0 + 0.4, 0.5, 0.0, ww, "out", 5)])}</rect>']
-    for j, ln in enumerate(wrap(band.about, 26, 880, 2, True)):
-        out.append(F.reveal(t0 + 0.6 + 0.25 * j, 60, 360 + 40 * j, 900, 40, F.text(60, 390 + 40 * j, ln, 26, "b"), 0.5))
-    return "".join(out)
-
-
-def shot_tower(F: Film, t0: float, t1: float) -> str:
-    """The stack lands slab by slab; then a turn falls through it, and each band speaks as it lands."""
-    c = F.c
-    bands = F.f.bands[:4]
-    iso = P.rot(-36, -28)
-    sw, sd, st, gap = 280.0, 160.0, 34.0, 30.0
-    tx, ty = 230.0, 150.0
+def shot_runtime(F: Film, t0: float, t1: float) -> str:
+    """The runtime as a stair of bars, one per band, each landing in turn; the ball falls through
+    them, and each bar gives as it passes."""
+    bands = F.f.bands[:5]
     out = [F.bg("paper")]
-    slabs = []
+    hb, gap = min(96.0, (H - 120) / max(len(bands), 1) - 22), 22.0
+    top = (H - len(bands) * hb - (len(bands) - 1) * gap) / 2
+    bx = 850.0
+    tb = t0 + 0.35 + 0.18 * len(bands)
+    pts: list[tuple[float, float, float, float]] = [(tb - 0.2, bx, -60, BALL * 0.8)]
+    t = tb
     for k, band in enumerate(bands):
-        green = band.title.lower() == "humanize"
-        lo, hi = (c["deep"], c["green"]) if green else (c["ink"], P.mix(c["ink"], c["paper"], .5))
-        body = P.box(sw, st, sd).draw([iso, iso], 10, (0, 0), 1.0, hi, lo)
-        fx = P.apply(iso, (-sw / 2 + 14, 8, sd / 2))
-        label = (f'<g transform="matrix({n(iso[0][0])},{n(iso[1][0])},{n(iso[0][1])},{n(iso[1][1])},{n(fx[0])},{n(fx[1])})">'
-                 + F.text(0, 0, fit(band.title.upper(), 18, sw - 40, True), 18, "k", "night" if green else "paper") + "</g>")
-        oy = k * (st + gap)
-        ox, oyy = P.apply(iso, (0, oy, 0))[:2]
+        x = 60 + 36 * k
+        w = 900 - 36 * k - 60
+        y = top + k * (hb + gap)
+        cls = "green" if band.title.lower() == "humanize" else accent(k + 1)
         ti = t0 + 0.1 + 0.18 * k
-        slabs.append(f'<g transform="translate({n(tx + ox)} {n(ty + oyy)})"><g>{F.slide(ti, 0, -700, 0.35, "back")}{body}{label}</g></g>')
-    out.extend(reversed(slabs))
-    land0 = t0 + 1.0
-    beat = (t1 - land0 - 0.3) / max(len(bands), 1)
-
-    def top(k: int) -> tuple[float, float]:
-        x, y, _ = P.apply(iso, (sw * 0.25, -st / 2 + k * (st + gap), sd * 0.2))
-        return tx + x, ty + y - 16
-
-    pts = [(land0 - 0.35, top(0)[0], -60, 16.0), *[(t, top(0)[0], y, 16.0) for t, y in tween(land0 - 0.35, 0.35, -60.0, top(0)[1], "in", 5)][1:]]
-    for k in range(1, len(bands)):
-        a, b = top(k - 1), top(k)
-        tk = land0 + beat * k
-        pts.append((tk - 0.32, *a, 16.0))
-        for i in range(1, 7):
-            u = i / 6
-            pts.append((tk - 0.32 + 0.32 * u, a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * EASE["in"](u) - 30 * math.sin(math.pi * u), 16.0))
-    pts.append((t1, *top(len(bands) - 1), 16.0))
+        word = band.title.upper()
+        size = min(hb * 0.62, (bx - x - 70) / max(capw(word, 1), 1e-6))
+        land = y - BALL * 0.8
+        hit = t + 0.22
+        give = F.tf("translate", [(0, (0.0, 0.0)), (hit, (0.0, 0.0)), *tween(hit, 0.25, (0.0, 12.0), (0.0, 0.0), "back", 4)])
+        out.append(f'<g>{F.slide(ti, 1100 if k % 2 else -1100, 0, 0.35, "back")}<g>{give}{bar(x, y, w, hb, cls)}'
+                   + F.text(x + 24, y + hb / 2 + size * 0.36, word, size, "k", "night") + "</g></g>")
+        pts += [(tt, bx, yy, BALL * 0.8) for tt, yy in tween(t, 0.22, pts[-1][2], land, "in", 4)][1:]
+        pts.append((hit + 0.12, bx, land, BALL * 0.8))
+        t = hit + 0.12
+    pts += [(tt, bx, yy, BALL * 0.8) for tt, yy in tween(t, 0.35, pts[-1][2], H + 80, "in", 4)][1:]
     F.ball(pts)
-    hot = lambda s: s.lower().startswith("litellm")  # noqa: E731 -- the runtime's own model call
-    for k, band in enumerate(bands):
-        a = land0 + beat * k
-        b = land0 + beat * (k + 1) if k + 1 < len(bands) else t1 + 0.01
-        x0 = 520.0
-        title = band.title.upper()
-        size = min(54.0, 440 / capw(title, 1))
-        panel = [F.pop(a, x0, 120, F.text(0, 0, title, size), 1.6, 0.3),
-                 F.reveal(a + 0.12, x0, 140, 460, 60, "".join(F.text(x0, 164 + 22 * j, ln, 17, "r", "mute")
-                                                              for j, ln in enumerate(wrap(band.about, 17, 450, 2))), 0.35)]
-        cx, cy = x0, 220.0
-        for i, (name, note) in enumerate(band.chips[:12]):
-            label = name + (f" · {note}" if note else "")
-            w = width(label, 16, True) * 0.86 + 18
-            if cx + w > W - 30:
-                cx, cy = x0, cy + 38
-            lit = hot(name)
-            chip = (f'<rect width="{n(w)}" height="30" class="{"green" if lit else "chip"}"/>' + F.text(9, 21, label, 16, "b", "paper" if lit else "ink"))
-            ti = a + 0.18 + 0.035 * i
-            px, py = P.apply(iso, (0, k * (st + gap), 0))[:2]
-            out_ = F.tf("translate", [(0, (tx + px - cx, ty + py - cy)), *tween(ti, 0.3, (tx + px - cx, ty + py - cy), (0.0, 0.0), "out", 5)])
-            panel.append(f'<g transform="translate({n(cx)} {n(cy)})"><g>{out_}{F.anim("opacity", [(0, 0), (ti, 0), (ti + 0.05, 1)])}{chip}</g></g>')
-            cx += w + 8
-        if band.down:
-            panel.append(F.reveal(a + 0.4, 40, 480, 940, 50, f'<polygon points="40,488 60,488 50,503" class="green"/>'
-                                  + F.text(72, 503, fit(band.down, 20, 880), 20, "i"), 0.5))
-        out.append(f'<g display="none">{F.show(a, b)}{"".join(panel)}</g>')
+    out.append(ring(bx, H / 2, 240, 2, F.c["ink"], ' stroke-dasharray="3 9" opacity=".45"'))
     return "".join(out)
 
 
-def shot_feature(i: int, h3: str, p: str, env: list[tuple[str, str]]) -> Draw:
-    """A promise the runtime keeps, and a diagram that keeps it."""
-    def draw(F: Film, t0: float, t1: float) -> str:
-        ground = ("paper", "ink", "paper")[i % 3]
-        ink = flip(ground)
-        out = [F.bg(ground)]
-        size, lines = fitlines(h3.upper(), 400, 56, 30, 3)
-        body, _, ey = words_in(F, t0 + 0.05, 50, 120, lines, size, ink, 1.06, 0.07)
-        out.append(body)
-        out.append(F.reveal(t0 + 0.5, 50, ey + 20, 420, 90, "".join(F.text(50, ey + 46 + 24 * j, ln, 18, "r", "mute" if ground == "paper" else "paper")
-                                                                    for j, ln in enumerate(wrap(p, 18, 400, 3))), 0.5))
-        key = (h3 + " " + p).lower()
-        x, y, w = 520.0, 200.0, 430.0
-        if "budget" in key:
-            stop = x + w * 0.82
-            out += [f'<rect x="{n(x)}" y="{n(y)}" width="{n(w)}" height="70" class="chip"/>',
-                    f'<rect x="{n(x)}" y="{n(y)}" height="70" class="{ink}">{F.anim("width", [(0, 0), *tween(t0 + 0.3, 1.2, 0.0, stop - x, "io", 6)])}</rect>',
-                    f'<rect x="{n(stop)}" y="{n(y - 24)}" width="10" height="118" class="green"/>',
-                    F.at(stop - 40, y + 160, '<rect x="-90" y="-36" width="180" height="62" class="green"/>' + F.text(0, 12, "STOP", 38, "k", "paper", "middle"),
-                         F.tf("rotate", [(0, -8.0)]), F.tf("scale", [(0, (0.0, 0.0)), (t0 + 1.5, (0.0, 0.0)), *tween(t0 + 1.5, 0.25, (3.0, 3.0), (1.0, 1.0), "back", 5)[0:]]))]
-        elif "trace" in key or "clock" in key:
-            for j, (a, w_, cls) in enumerate([(0.0, 0.3, ink), (0.32, 0.22, "green"), (0.56, 0.4, ink),
-                                              (0.08, 0.18, "green"), (0.4, 0.25, ink), (0.7, 0.26, "green")]):
-                out.append(f'<rect x="{n(x + a * w)}" y="{n(y + (j % 3) * 46)}" height="34" class="{cls}">'
-                           f'{F.anim("width", [(0, 0), *tween(t0 + 0.2 + a * 1.6, 0.4, 0.0, w_ * w, "out", 4)])}</rect>')
-            out.append(f'<rect y="{n(y - 20)}" width="5" height="170" class="green">{F.anim("x", [(0, x), (t0 + 0.2, x), (t0 + 2.2, x + w)])}</rect>')
-        else:
-            for j, (name, _) in enumerate(env[:4]):
-                ti = t0 + 0.25 + 0.22 * j
-                out.append(f'<g>{F.slide(ti, 500, 0, 0.3, "back")}<rect x="{n(x)}" y="{n(y - 10 + j * 56)}" width="30" height="36" class="green"/>'
-                           + F.text(x + 46, y + 18 + j * 56, fit(name.upper(), 24, w - 50, True), 24, "k", ink) + "</g>")
-        return "".join(out)
-    return draw
-
-
-def shot_count(word: str, count: int, note: str) -> Draw:
+def shot_count(word: str, count: int, ground: str) -> Draw:
     """A number, spun into place on a counter, and what it counts."""
     def draw(F: Film, t0: float, t1: float) -> str:
+        ink = flip(ground)
         s = str(count)
-        size = 240.0
-        adv = size * 0.74
-        out = [F.bg("green"), odo(F, 70, 330, s, size, "paper", t0 + 0.05, adv)]
-        x = 90 + adv * len(s)
-        out.append(F.pop(t0 + 0.35, x, 250, blockword(F, 0, 0, word.upper(), 96, t0 + 0.5, "ink", (F.c["paper"], P.mix(F.c["paper"], F.c["green"], .5)), 7), 1.8, 0.3))
-        out.append(F.reveal(t0 + 0.7, x, 280, W - x, 50, F.text(x, 312, note, 26, "b", "paper"), 0.4))
+        out = [F.bg(ground), F.at(820, 120, disc(0, 0, 150, "ink" if ink == "night" else accent(3)),
+                                   F.tf("scale", [(0, (0.0, 0.0)), *tween(t0 + 0.15, 0.4, (0.0, 0.0), (1.0, 1.0), "back", 5)]))]
+        digits, wide = odo(F, 70, 360, s, 250, ink, t0 + 0.05)
+        out.append(digits)
+        x = 100 + wide
+        size = min(96.0, (W - 40 - x) / max(capw(word.upper(), 1), 1e-6))
+        out.append(tilt(x, 300, f'<rect x="0" y="0" width="0" height="14" class="ink">{F.grow("width", t0 + 0.3, 0.0, W - x)}</rect>'))
+        out.append(slam(F, t0 + 0.35, x, 280, word.upper(), size, ink if ink != "night" else "paper"))
         return "".join(out)
     return draw
-
-
-def odo(F: Film, x: float, base: float, s: str, size: float, ink: str, t: float, adv: float) -> str:
-    """Digits that spin into place like a mechanical counter, from t; anything else stands still."""
-    cid = F.uid("odo")
-    out = [f'<clipPath id="{cid}"><rect x="{n(x - 10)}" y="{n(base - size * 0.95)}" width="{n(adv * len(s) + 40)}" height="{n(size * 1.2)}"/></clipPath>',
-           f'<g clip-path="url(#{cid})">']
-    cx, k = x, 0
-    line = size * 1.2
-    for ch in s:
-        w = adv * (0.45 if ch in ".,:" else 1.0)
-        if ch.isdigit():
-            land = 10 + int(ch)
-            strip = "".join(F.text(cx + w / 2, base + line * i, str(i % 10), size, "k", ink, "middle") for i in range(land + 1))
-            ti = t + 0.06 * k
-            out.append(f'<g>{F.tf("translate", [(0, (0.0, 0.0)), *tween(ti, 0.7 + 0.08 * k, (0.0, 0.0), (0.0, -line * land), "out", 8)])}{strip}</g>')
-            k += 1
-        else:
-            out.append(F.pop(t + 0.5, cx + w / 2, base, F.text(0, 0, ch, size, "k", ink, "middle"), 0.2, 0.3))
-        cx += w
-    out.append("</g>")
-    return "".join(out)
 
 
 def kind_of(fl: Flow) -> str:
@@ -1262,337 +1194,368 @@ def kind_of(fl: Flow) -> str:
     return "loop"
 
 
-def cube(F: Film, x: float, y: float, s: float, green: bool) -> str:
-    """A small axonometric block: an agent."""
-    c = F.c
-    top, left, right = ((P.mix(c["green"], "#ffffff", .2), c["green"], c["deep"]) if green else
-                        (P.mix(c["ink"], c["paper"], .55), P.mix(c["ink"], c["paper"], .25), c["ink"]))
-    h = s * 0.5
-    return (f'<polygon points="{n(x)},{n(y - h)} {n(x + s)},{n(y - h - s * .5)} {n(x + 2 * s)},{n(y - h)} {n(x + s)},{n(y - h + s * .5)}" fill="{top}"/>'
-            f'<polygon points="{n(x)},{n(y - h)} {n(x + s)},{n(y - h + s * .5)} {n(x + s)},{n(y + s * .9)} {n(x)},{n(y + s * .4)}" fill="{left}"/>'
-            f'<polygon points="{n(x + s)},{n(y - h + s * .5)} {n(x + 2 * s)},{n(y - h)} {n(x + 2 * s)},{n(y + s * .4)} {n(x + s)},{n(y + s * .9)}" fill="{right}"/>')
+def glyph(F: Film, kind: str, gx: float, gy: float, col: str, ink: str, t0: float, t1: float) -> str:
+    """A kind of loop, acted out by shapes in a box of about 320 around (gx, gy)."""
+    out = []
+    if kind == "relay":   # two agents; the work goes back and forth between them
+        out += [disc(gx - 110, gy, 60, col), disc(gx + 110, gy, 60, ink)]
+        pts = []
+        for j in range(4):
+            a, b = (-110.0, 110.0) if j % 2 == 0 else (110.0, -110.0)
+            for i in range(7):
+                u = i / 6
+                pts.append((t0 + 0.1 + 0.25 * (j + u), (a + (b - a) * EASE["io"](u), -150 * math.sin(math.pi * u))))
+        out.append(f'<g>{F.tf("translate", pts)}{disc(gx - 110, gy, 18, "pink" if col != "pink" else "gold")}</g>')
+    elif kind == "checker":   # a maker hands its work to a checker, which signs it off
+        out.append(f'<g>{F.tf("translate", [(0, (0.0, 0.0)), *tween(t0 + 0.15, 0.35, (0.0, 0.0), (120.0, 0.0), "back", 5)])}'
+                   f'{bar(gx - 200, gy - 60, 120, 120, col)}</g>')
+        out.append(f'<polygon points="{n(gx + 160)},{n(gy - 130)} {n(gx + 160)},{n(gy + 130)} {n(gx - 10)},{n(gy)}" class="{ink}"/>')
+        out.append(f'<path d="M{n(gx - 160)} {n(gy + 110)}l60 60l130 -170" fill="none" stroke="{F.c["pink"]}" stroke-width="22" '
+                   f'pathLength="1" stroke-dasharray="1 1">{F.anim("stroke-dashoffset", [(0, 1), *tween(t0 + 0.55, 0.3, 1.0, 0.0, "out", 4)])}</path>')
+    elif kind == "lanes":   # lanes at once, each at its own pace, to one line
+        for j in range(4):
+            out.append(f'<rect x="{n(gx - 170)}" y="{n(gy - 125 + 66 * j)}" width="0" height="46" class="{col if j % 2 == 0 else ink}">'
+                       f'{F.anim("width", [(0, 0), *tween(t0 + 0.1 + 0.07 * j, 0.5 + 0.12 * j, 0.0, 330.0, "out", 6)])}</rect>')
+        out.append(bar(gx + 168, gy - 150, 8, 300, "pink"))
+    elif kind == "cleaner":   # a sweep clears the leftovers
+        for i in range(6):
+            for j in range(4):
+                x = gx - 170 + 60 * i
+                ts = t0 + 0.2 + 0.1 * i
+                out.append(f'<rect x="{n(x)}" y="{n(gy - 115 + 60 * j)}" width="44" height="44" class="{col if (i + j) % 3 else ink}">'
+                           f'{F.anim("opacity", [(0, 1), (ts, 1), (ts + 0.08, 0)], True)}</rect>')
+        out.append(f'<g>{F.tf("translate", [(0, (0.0, 0.0)), (t0 + 0.15, (0.0, 0.0)), (t0 + 0.85, (370.0, 0.0))])}'
+                   f'{bar(gx - 200, gy - 150, 18, 300, "pink")}</g>')
+    elif kind == "divide":   # a problem split, and split again
+        for qx in (-1, 1):
+            for qy in (-1, 1):
+                ox, oy = gx + (55 * qx - 55), gy + (55 * qy - 55)
+                mv = F.tf("translate", [(0, (0.0, 0.0)), *tween(t0 + 0.2, 0.3, (0.0, 0.0), (24.0 * qx, 24.0 * qy), "back", 5)])
+                split = t0 + 0.6 + 0.05 * (qx + 1 + (qy + 1) // 2)
+                whole = (f'<rect x="{n(ox)}" y="{n(oy)}" width="108" height="108" class="{col}">'
+                         f'{F.anim("opacity", [(0, 1), (split, 1), (split + 0.04, 0)], True)}</rect>')
+                cells = "".join(f'<rect x="{n(ox + 56 * a)}" y="{n(oy + 56 * b)}" width="52" height="52" '
+                                f'class="{col if (a + b) % 2 == (qx > 0) else ink}" opacity="0">'
+                                f'{F.anim("opacity", [(0, 0), (split, 0), (split + 0.04, 1)], True)}</rect>'
+                                for a in (0, 1) for b in (0, 1))
+                out.append(f"<g>{mv}{whole}{cells}</g>")
+    else:   # a loop: round and round until it is done
+        out.append(ring(gx, gy, 120, 26, F.c[col]))
+        out.append(F.at(gx, gy, disc(120, 0, 30, ink), F.spin(t0, t1, -90.0, 630.0)))
+    return "".join(out)
 
 
-def shot_flow(i: int, total: int, fl: Flow) -> Draw:
-    """One flow, at montage speed: its kind stamped, its name sliding through, its loop acted out."""
+def shot_flowkind(i: int, kind: str, tag: str, count: int) -> Draw:
+    """One kind of loop: its shapes acting it out, its name, one square per flow of the kind."""
     def draw(F: Film, t0: float, t1: float) -> str:
         ground = ("paper", "ink")[i % 2]
         ink = flip(ground)
-        d = t1 - t0
-        out = [F.bg(ground)]
-        tag = (fl.tag or "A flow").upper()
-        out.append(F.at(60, 90, f'<rect x="0" y="-26" width="{n(tracked(tag, 18) + 26)}" height="38" class="green"/>' + F.text(13, 0, tag, 18, "t", "paper"),
-                        F.tf("rotate", [(0, -4.0)]), F.tf("scale", [(0, (2.2, 2.2)), *tween(t0, 0.18, (2.2, 2.2), (1.0, 1.0), "back", 4)])))
-        out.append(F.text(W - 50, 90, f"{i + 1:02d} / {total:02d}", 22, "t", ink, "end"))
-        head, colon, rest = fl.name.partition(":")
-        lines = [head + colon, rest] if colon and width(fl.name, 70, True) > 640 else [fl.name]
-        size = min(84.0, min(640 / max(width(ln, 1, True), 1e-6) for ln in lines))
-        names = "".join(F.text(60, 230 + j * size * 1.02, ln, size, "k", ink) for j, ln in enumerate(lines))
-        sx = 160 if i % 2 else -160
-        out.append(f'<g>{F.tf("translate", [(0, (sx, 0.0)), *tween(t0, 0.22, (sx, 0.0), (0.0, 0.0), "out", 4), (t1, (-sx * 0.25, 0.0))])}{names}</g>')
-        yb = 230 + (len(lines) - 1) * size * 1.02 + 50
-        out.append(F.reveal(t0 + 0.2, 60, yb - 28, 900, 70, "".join(F.text(60, yb + 26 * j, ln, 21, "r", "mute" if ground == "paper" else "paper")
-                                                                  for j, ln in enumerate(wrap(fl.blurb, 21, 600, 2))), 0.3))
-        if fl.roles:
-            out.append(F.reveal(t0 + 0.35, 60, H - 70, 600, 40, F.text(60, H - 44, fit("-a " + " · ".join(fl.roles), 18, 560), 18, "b", "green"), 0.25))
-        # The loop, acted out at the right.
-        ox, oy = 790.0, 440.0
-        kind = kind_of(fl)
-        ball = F.sh.ball()
-        mark = len(out)
-
-        def orb(keys: list) -> str:
-            return f'<circle r="13" fill="{ball}">{F.tf("translate", keys)}</circle>'
-
-        if kind in ("relay", "checker"):
-            a, b = (ox, oy), (ox + 130, oy - (60 if kind == "checker" else 0))
-            out += [cube(F, a[0] - 26, a[1], 26, False), cube(F, b[0] - 26, b[1], 26, True)]
-            keys = [(0, (a[0], a[1] - 34))]
-            for j in range(2):
-                p, q = (a, b) if j % 2 == 0 else (b, a)
-                s0 = t0 + 0.1 + j * d * 0.42
-                keys += [(t, (x, y)) for t, (x, y) in [(s0 + d * 0.38 * u, (p[0] + (q[0] - p[0]) * EASE["io"](u), p[1] - 34 + (q[1] - p[1]) * u - 70 * math.sin(math.pi * u)))
-                                                       for u in (k_ / 8 for k_ in range(9))]]
-            out.append(orb(keys))
-        elif kind == "lanes":
-            for j in range(3):
-                yy = oy - 90 + 50 * j
-                out.append(f'<line x1="{n(ox - 40)}" y1="{n(yy)}" x2="{n(ox + 190)}" y2="{n(yy)}" class="wire" opacity=".6"/>')
-                out.append(orb([(0, (ox - 30, yy)), (t0 + 0.05 * j, (ox - 30, yy)), (t1 - 0.1 * j, (ox + 180, yy))]))
-            out.append(f'<rect x="{n(ox + 200)}" y="{n(oy - 110)}" width="12" class="green">{F.anim("height", [(0, 0), (t0, 0), (t1, 120)])}</rect>')
-        elif kind == "divide":
-            root, kids = (ox + 70, oy - 120), [(ox, oy - 40), (ox + 140, oy - 40)]
-            leaves = [(ox - 30, oy + 30), (ox + 30, oy + 30), (ox + 110, oy + 30), (ox + 170, oy + 30)]
-            for j, lf in enumerate(leaves):
-                kd = kids[j // 2]
-                out.append(f'<polyline points="{n(root[0])},{n(root[1])} {n(kd[0])},{n(kd[1])} {n(lf[0])},{n(lf[1])}" class="hair" opacity=".6"/>')
-                out.append(orb([(0, root), (t0, root), (t0 + d * 0.35, kd), (t0 + d * 0.7, lf)]))
-        elif kind == "cleaner":
-            out.append(cube(F, ox - 30, oy, 26, False))
-            for j in range(4):
-                out.append(f'<rect x="{n(ox + 60)}" y="{n(oy - 20 - 22 * j)}" width="100" height="16" class="{ink}" opacity="0">'
-                           f'{F.anim("opacity", [(0, 0), (t0 + 0.1 + 0.12 * j, 1), (t0 + d * 0.75, 0)], True)}</rect>')
-            out.append(f'<rect x="{n(ox + 60)}" y="{n(oy - 20)}" width="100" height="16" class="green" opacity="0">{F.anim("opacity", [(0, 0), (t0 + d * 0.75, 1)], True)}</rect>')
-        else:
-            out.append(f'<ellipse cx="{n(ox + 60)}" cy="{n(oy - 20)}" rx="120" ry="34" class="hair" opacity=".6"/>')
-            keys = [(t0 + d * u, (ox + 60 + 120 * math.cos(2 * math.pi * u), oy - 20 + 34 * math.sin(2 * math.pi * u))) for u in (k_ / 16 for k_ in range(17))]
-            out += [cube(F, ox + 30, oy - 6, 30, i % 4 == 0), orb([(0, keys[0][1]), *keys])]
-        loop = "".join(out[mark:])  # the loop, drawn small, shown large
-        return "".join(out[:mark]) + f'<g transform="translate({n(ox)} {n(oy)}) scale(1.6) translate({n(-ox - 40)} {n(-oy + 20)})">{loop}</g>'
+        col = accent(i + 1)
+        out = [F.bg(ground), tilt(W, 0, bar(-500, -30, 1000, 60, accent(i + 3)) if i % 2 else "")]
+        out.append(F.at(0, 0, glyph(F, kind, 280, 290, col, ink, t0, t1),
+                        F.tf("scale", [(0, (1.0, 1.0))])))
+        size, lines = fitlines(tag.upper(), 430, 66, 28, 2)
+        for j, ln in enumerate(lines):
+            out.append(slam(F, t0 + 0.1 + 0.08 * j, 520, 250 + size * 1.05 * j, ln, size, ink))
+        y = 250 + size * 1.05 * (len(lines) - 1) + 40
+        for k in range(count):
+            out.append(F.pop(t0 + 0.35 + 0.06 * k, 532 + 40 * k, y + 12, bar(-12, -12, 24, 24, col), 0.0, 0.25))
+        return "".join(out)
     return draw
-
-
-SOLIDS: list[Callable[[], P.Solid]] = [
-    lambda: P.prism(6, 62, 120),   # a column: what the rest stands on
-    lambda: P.box(110, 110, 110),
-    lambda: P.octahedron(82),
-    lambda: P.wedge(150, 104, 96),
-    lambda: P.pyramid(4, 90, 140),
-    lambda: P.prism(3, 80, 120, "z"),
-]
 
 
 def shot_project(i: int, p: Project) -> Draw:
-    """A project: a solid spinning in, its name cut deep, what it is."""
+    """A project: its name cut deep across a colour, on one of three compositions."""
     def draw(F: Film, t0: float, t1: float) -> str:
-        c = F.c
-        ground = ("paper", "green")[i % 2]
-        ink = flip(ground)
+        ground = "green" if p.name.lower() == "humanize" else accent(i + 1)
+        word = p.name.upper()
+        size = min(200.0, 760 / max(capw(word, 1), 1e-6))
+        ww = capw(word, size)
         out = [F.bg(ground)]
-        green = ground == "paper"
-        lo, hi = (c["deep"], c["green"]) if green else (c["ink"], P.mix(c["ink"], c["paper"], .55))
-        frames = [P.rot(360 * u + 30 * i, -24 + 10 * math.sin(2 * math.pi * u), 8 * math.sin(4 * math.pi * u)) for u in P.loop_frames(48)]
-        solid = SOLIDS[i % len(SOLIDS)]().draw(frames, 6, (0, 0), 1.0, hi, lo, persp=900)
-        out.append(f'<ellipse cx="240" cy="470" rx="150" ry="18" class="ink" opacity=".25"/>')
-        out.append(F.at(240, 290, solid, F.tf("scale", [(0, (0.2, 0.2)), *tween(t0, 0.45, (0.2, 0.2), (2.0, 2.0), "back", 6), (t1, (2.15, 2.15))]),
-                        F.tf("translate", [(0, (0.0, -500.0)), *tween(t0, 0.35, (0.0, -500.0), (0.0, 0.0), "out", 4)])))
-        name = p.name.upper()
-        size = min(130.0, 480 / max(capw(name, 1), 1e-6))
-        x0 = 470.0
-        side = (c["green"], c["deep"]) if ground == "paper" else (c["ink"], P.mix(c["ink"], c["green"], .4))
-        out.append(F.pop(t0 + 0.15, x0, 250, blockword(F, 0, 0, name, size, t0 + 0.4, ink, side, length=capw(name, size)), 1.8, 0.3))
-        sub = p.sub or ""
-        if sub:
-            sz, lines = fitlines(sub.upper(), 480, 34, 20, 2)
-            out.append(F.reveal(t0 + 0.45, x0, 270, 520, 100, "".join(F.text(x0, 310 + sz * 1.1 * j, ln, sz, "k", ink) for j, ln in enumerate(lines)), 0.4))
-        if p.lede:
-            out.append(f'<g opacity="0">{F.anim("opacity", [(0, 0), (t0 + 0.8, 0), (t0 + 1.1, 1)])}'
-                       + "".join(F.text(x0, 400 + 24 * j, ln, 18, "r", "mute" if ground == "paper" else "paper") for j, ln in enumerate(wrap(p.lede, 18, 480, 3))) + "</g>")
-        out.append(f'<rect x="{n(x0)}" y="140" height="12" class="{"green" if ground == "paper" else "ink"}">{F.anim("width", [(0, 0), *tween(t0 + 0.2, 0.4, 0.0, 120.0, "out", 4)])}</rect>')
+        v = i % 3
+        if v == 0:
+            out.append(F.at(780, 300, disc(0, 0, 230, accent(i + 3)) + bar(-230, -10, 460, 20, "ink"), F.spin(t0, t1, -20.0, 40.0),
+                            F.tf("scale", [(0, (0.0, 0.0)), *tween(t0, 0.4, (0.0, 0.0), (1.0, 1.0), "back", 6)])))
+        elif v == 1:
+            out.append(f'<g>{F.slide(t0, 700, -300, 0.4, "back")}<polygon points="{n(W)},0 {n(W)},{n(H)} {n(W - 420)},0" class="{accent(i + 2)}"/></g>')
+            out.append(F.pop(t0 + 0.3, 160, 120, disc(0, 0, 60, "ink"), 0.0, 0.3))
+        else:
+            for k in range(4):
+                out.append(f'<g>{F.slide(t0 + 0.06 * k, -1100, 0, 0.35, "back")}{bar(0, 400 + 34 * k, 300 + 160 * k, 20, "ink" if k % 2 else accent(i + 2))}</g>')
+        x = (W - ww) / 2
+        out.append(tilt(x, 300, f'<g>{F.tf("translate", [(0, (-1200.0, 0.0)), *tween(t0 + 0.08, 0.38, (-1200.0, 0.0), (0.0, 0.0), "back", 6), (t1, (30.0, 0.0))])}'
+                    + F.text(10, size * 0.35 + 10, word, size, "k", "paper", extra=f' textLength="{n(ww)}" lengthAdjust="spacingAndGlyphs"')
+                    + F.text(0, size * 0.35, word, size, "k", "night", extra=f' textLength="{n(ww)}" lengthAdjust="spacingAndGlyphs"')
+                    + "</g>", -ANGLE / 2))
         return "".join(out)
     return draw
 
 
-def shot_result(i: int, r: Result) -> Draw:
-    """A result: the number spins into place, filling the frame; the claim beneath it."""
+def figure(num: str) -> tuple[str, tuple[float, ...]]:
+    """What a headline number is, so it can be drawn: a share, a rank, a multiple, a count..."""
+    s = num.replace(",", "")
+    for kind, pat in (("frac", r"(\d+)/(\d+)"), ("rank", r"#(\d+)"), ("lift", r"\+(\d+(?:\.\d+)?)%"),
+                      ("pct", r"(\d+(?:\.\d+)?)%"), ("times", r"(\d+(?:\.\d+)?)×"), ("count", r"(\d+)\+?"), ("score", r"(\d*\.\d+)")):
+        m = re.fullmatch(pat, s)
+        if m:
+            return kind, tuple(float(g_) for g_ in m.groups())
+    return "mark", ()
+
+
+def chart(F: Film, kind: str, v: tuple[float, ...], x: float, y: float, w: float, h: float, col: str, ink: str, t: float) -> str:
+    """A number drawn as shapes, in the box (x, y, w, h), building from t."""
+    cx, cy = x + w / 2, y + h / 2
+    if kind == "frac" and 0 < v[1] <= 64:
+        a, b = int(v[0]), int(v[1])
+        cols = max(1, math.ceil(math.sqrt(b * w / h)))
+        rows = math.ceil(b / cols)
+        cell = min(w / cols, h / rows)
+        out = []
+        for i in range(b):
+            px, py = x + (i % cols) * cell + cell / 2, y + (i // cols) * cell + cell / 2
+            sq = bar(-cell * 0.42, -cell * 0.42, cell * 0.84, cell * 0.84, col if i < a else ink,
+                     "" if i < a else ' opacity=".18"')
+            out.append(F.pop(t + 0.7 * i / b, px, py, sq, 0.0, 0.25))
+        return "".join(out)
+    if kind in ("frac", "score"):
+        share = min(1.0, v[0] / v[1]) if kind == "frac" and v[1] else min(1.0, v[0])
+        r = min(w, h) / 2 - 20
+        return (ring(cx, cy, r, 34, F.c[ink], ' opacity=".15"')
+                + f'<circle cx="{n(cx)}" cy="{n(cy)}" r="{n(r)}" fill="none" stroke="{F.c[col]}" stroke-width="34" pathLength="1" '
+                  f'stroke-dasharray="1 1" transform="rotate(-90 {n(cx)} {n(cy)})">{F.anim("stroke-dashoffset", [(0, 1), *tween(t, 0.8, 1.0, 1 - share, "out", 8)])}</circle>'
+                + F.pop(t + 0.7, cx, cy, disc(0, 0, r * 0.35, col), 0.0, 0.3))
+    if kind == "pct":
+        bw = w * 0.42
+        hh = h * min(1.0, v[0] / 100)
+        return (bar(cx - bw / 2, y, bw, h, ink, ' opacity=".15"') + bar(cx - bw / 2 - 20, y - 6, bw + 40, 6, ink)
+                + f'<rect x="{n(cx - bw / 2)}" y="{n(y + h)}" width="{n(bw)}" height="0" class="{col}">'
+                  f'{F.anim("y", [(0, y + h), *tween(t, 0.7, y + h, y + h - hh, "back", 6)])}{F.anim("height", [(0, 0), *tween(t, 0.7, 0.0, hh, "back", 6)])}</rect>')
+    if kind in ("times", "lift"):
+        k = v[0] if kind == "times" else 1 + v[0] / 100
+        hi = h
+        lo = h / max(k, 1.0)
+        out = []
+        for j, (hh, cls) in enumerate(((lo, ink), (hi, col))):
+            bx = x + w * (0.1 + 0.48 * j)
+            out.append(f'<rect x="{n(bx)}" y="{n(y + h)}" width="{n(w * 0.34)}" height="0" class="{cls}"{"" if j else " opacity=\".35\""}>'
+                       f'{F.anim("y", [(0, y + h), *tween(t + 0.15 * j, 0.6, y + h, y + h - hh, "back", 6)])}'
+                       f'{F.anim("height", [(0, 0), *tween(t + 0.15 * j, 0.6, 0.0, hh, "back", 6)])}</rect>')
+        out.append(F.pop(t + 0.7, x + w * 0.75, y - 30, f'<polygon points="-26,16 0,-22 26,16" class="pink"/>', 0.0, 0.3))
+        return "".join(out)
+    if kind == "rank" and v[0] <= 3:
+        out = []
+        steps = ((2, 0.62), (1, 1.0), (3, 0.42))
+        sw = w / 3
+        for j, (place, k) in enumerate(steps):
+            hh = h * 0.7 * k
+            cls = col if place == v[0] else ink
+            out.append(f'<g>{F.slide(t + 0.08 * j, 0, h + 60, 0.4, "back")}{bar(x + sw * j, y + h - hh, sw - 6, hh, cls, "" if place == v[0] else " opacity=\".3\"")}</g>')
+            if place == v[0]:
+                top = y + h - hh
+                out.append(f'<circle cx="{n(x + sw * j + sw / 2 - 3)}" cy="-60" r="26" class="pink">'
+                           f'{F.anim("cy", [(0, -60), *tween(t + 0.4, 0.35, -60.0, top - 26, "in", 5), *tween(t + 0.75, 0.2, top - 50, top - 26, "in", 3)[1:]])}</circle>')
+        return "".join(out)
+    if kind == "count" and 1 <= v[0] <= 120:
+        return chart(F, "frac", (v[0], v[0]), x, y, w, h, col, ink, t)
+    if kind in ("count", "rank"):
+        out = [F.pop(t, cx, cy, disc(0, 0, min(w, h) * 0.18, col), 0.0, 0.3)]
+        for j in range(24):
+            a = 360 * j / 24
+            out.append(f'<g transform="translate({n(cx)} {n(cy)}) rotate({n(a)})"><rect x="{n(min(w, h) * 0.22)}" y="-5" height="10" width="0" class="{col if j % 3 == 0 else ink}">'
+                       f'{F.anim("width", [(0, 0), *tween(t + 0.02 * j, 0.4, 0.0, min(w, h) * (0.18 + 0.1 * (j % 3)), "back", 5)])}</rect></g>')
+        return "".join(out)
+    return (F.pop(t, cx, cy, disc(0, 0, min(w, h) * 0.42, col), 0.0, 0.35)
+            + f'<path d="M{n(cx - 70)} {n(cy)}l50 50l100 -110" fill="none" stroke="{F.c["night"]}" stroke-width="24" pathLength="1" '
+              f'stroke-dasharray="1 1">{F.anim("stroke-dashoffset", [(0, 1), *tween(t + 0.3, 0.3, 1.0, 0.0, "out", 4)])}</path>')
+
+
+def stamp(F: Film, t: float, x: float, y: float) -> str:
+    """NEW, stamped on at an angle."""
+    body = bar(-62, -26, 124, 52, "pink") + F.text(0, 13, "NEW", 34, "k", "night", "middle")
+    return F.at(x, y, f'<g transform="rotate(-12)">{body}</g>',
+                F.tf("scale", [(0, (0.0, 0.0)), (t, (3.0, 3.0)), *tween(t, 0.25, (3.0, 3.0), (1.0, 1.0), "back", 5)[1:]]))
+
+
+def shot_achievement(i: int, a: Achievement, new: bool) -> Draw:
+    """One achievement: its number spun onto a counter, drawn as shapes beside it, one line of what
+    it is -- and, if it is new, stamped so."""
     def draw(F: Film, t0: float, t1: float) -> str:
-        ground = ("green", "paper", "ink")[i % 3]
+        ground = ("paper", "ink", accent(i))[i % 3]
         ink = flip(ground)
-        num = r.num
-        units = sum(0.45 if ch in ".,:" else 1.0 for ch in num)
-        size = min(230.0, 860 / (units * 0.74))
-        adv = size * 0.74
-        x = (W - adv * units) / 2
-        base = 300.0
-        out = [F.bg(ground)]
-        out.append(f'<g>{F.tf("scale", [(0, (1.0, 1.0)), (t0, (1.0, 1.0)), (t1, (1.05, 1.05))])}'
-                   f'{odo(F, x, base, num, size, ink, t0 + 0.02, adv)}</g>')
-        out.append(f'<rect x="{n(x)}" y="{n(base + 30)}" height="14" class="{"ink" if ground == "green" else "green"}">'
-                   f'{F.anim("width", [(0, 0), *tween(t0 + 0.4, 0.4, 0.0, adv * units, "out", 4)])}</rect>')
-        sz, lines = fitlines(r.label.upper(), 860, 34, 20, 2)
-        out.append(F.reveal(t0 + 0.5, 40, base + 50, 920, 100, "".join(F.text(W / 2, base + 50 + sz + sz * 1.1 * j, ln, sz, "k", ink, "middle")
-                                                                      for j, ln in enumerate(lines)), 0.35))
+        col = accent(i + 1) if ground == "ink" or ground == "paper" else ("ink" if ink == "night" else accent(i + 2))
+        out = [F.bg(ground), tilt(-40, 548, f'<g>{F.slide(t0, -1200, 0, 0.35)}{bar(0, 0, 1300, 22, accent(i + 2) if ground in ("paper", "ink") else "ink")}</g>', -3)]
+        num = a.num
+        if num:
+            room = 560.0
+            size = min(210.0, room / max(0.74 * sum(0.45 if ch in ".,:" else 1.0 for ch in num), 1e-6))
+            digits, _ = odo(F, 60, 120 + size * 0.8, num, size, ink, t0 + 0.05)
+            out.append(digits)
+            kind, v = figure(num)
+            out.append(chart(F, kind, v, 650, 80, 290, 290, col, ink if ground != accent(i) else "night", t0 + 0.2))
+            lines = wrap(a.label, 30, 860, 2, True)
+            for j, ln in enumerate(lines):
+                out.append(f'<g>{F.slide(t0 + 0.4 + 0.08 * j, -900, 0, 0.35, "out")}' + F.text(60, 425 + 38 * j, ln, 30, "b", ink) + "</g>")
+        else:
+            size, lines = fitlines(a.label.upper(), 560, 64, 30, 4)
+            for j, ln in enumerate(lines):
+                out.append(slam(F, t0 + 0.1 + 0.08 * j, 60, 140 + size * 1.05 * j, ln, size, ink))
+            out.append(chart(F, "mark", (), 650, 80, 290, 290, col, ink, t0 + 0.2))
+        if new:
+            out.append(stamp(F, t0 + 0.55, 860, 470))
         return "".join(out)
     return draw
 
 
-def shot_post(i: int, p: Post) -> Draw:
-    """A post: its kind stamped on, its title cascading in."""
+def shot_wall(page: list[Achievement], first: int) -> Draw:
+    """The rest of the achievements, plates stamped onto a wall: a number and a line each."""
     def draw(F: Film, t0: float, t1: float) -> str:
-        out = [F.bg("paper"), f'<rect x="0" y="0" width="26" height="{n(H)}" class="ink"/>',
-               F.at(W - 40, H + 20, '<circle r="210" class="green"/><rect x="-210" y="-10" width="420" height="20" class="paper"/>',
-                    F.tf("translate", [(0, (400.0, 0.0)), *tween(t0, 0.5, (400.0, 0.0), (0.0, 0.0), "out", 5), (t1, (-30.0, 0.0))]),
-                    F.tf("rotate", [(0, -120.0), *tween(t0, 0.5, -120.0, 0.0, "out", 5), (t1, 14.0)])),
-               f'<g>{F.slide(t0 + 0.1, 0, -300, 0.35, "back")}<polygon points="{n(W)},0 {n(W)},150 {n(W - 260)},0" class="ink"/></g>']
-        plate = "green" if p.kind == "NEWS" else "ink"
-        out.append(F.at(130, 110, f'<rect x="-80" y="-30" width="160" height="56" class="{plate}"/>' + F.text(0, 10, p.kind, 28, "t", "paper", "middle"),
-                        F.tf("rotate", [(0, -6.0)]), F.tf("scale", [(0, (2.6, 2.6)), *tween(t0, 0.22, (2.6, 2.6), (1.0, 1.0), "back", 5)])))
-        out.append(F.reveal(t0 + 0.2, 240, 90, 600, 40, F.text(240, 120, p.date.upper(), 22, "t", "mute"), 0.3))
-        size, lines = fitlines(p.title.upper(), 880, 66, 30, 3)
-        body, _, ey = words_in(F, t0 + 0.25, 60, 230, lines, size, "ink", 1.08, 0.05)
-        out.append(f"<g>{F.drift(t0 + 0.5, t1, -20)}{body}</g>")
-        if p.by:
-            out.append(F.reveal(t0 + 0.7, 60, ey + 20, 900, 40, F.text(60, ey + 50, fit(p.by, 20, 880), 20, "r", "mute"), 0.4))
+        cols = 4 if len(page) > 6 else 3
+        rows = math.ceil(len(page) / cols)
+        gap = 14.0
+        pw = (W - 80 - gap * (cols - 1)) / cols
+        ph = min(150.0, (H - 80 - gap * (rows - 1)) / rows)
+        y0 = (H - rows * ph - (rows - 1) * gap) / 2
+        out = [F.bg("ink")]
+        for k, a in enumerate(page):
+            x, y = 40 + (k % cols) * (pw + gap), y0 + (k // cols) * (ph + gap)
+            cls = accent(first + k)
+            num = a.num or "✓"
+            size = min(52.0, (pw - 32) / max(capw(num, 1), 1e-6))
+            body = (bar(0, 0, pw, ph, cls) + F.text(16, 16 + size * 0.8, num, size, "k", "night")
+                    + "".join(F.text(16, 16 + size + 14 + 18 * j, ln, 14, "b", "night")
+                              for j, ln in enumerate(wrap(a.label, 14, pw - 28, 2, True))))
+            ti = t0 + 0.08 + 0.07 * k
+            rot = 4.0 if k % 2 else -4.0
+            out.append(F.at(x + pw / 2, y + ph / 2, f'<g transform="translate({n(-pw / 2)} {n(-ph / 2)})">{body}</g>',
+                            F.tf("rotate", [(0, rot), *tween(ti, 0.35, rot, 0.0, "back", 5)]),
+                            F.tf("scale", [(0, (0.0, 0.0)), *tween(ti, 0.3, (0.0, 0.0), (1.0, 1.0), "back", 5)])))
         return "".join(out)
     return draw
 
 
 def shot_people(F: Film, t0: float, t1: float) -> str:
-    """The people burst out of the ball, then turn over, one after the other, as a wave."""
-    c = F.c
-    ppl = F.f.people[:24]
-    cols = 6 if len(ppl) > 8 else max(len(ppl), 1)
-    rows_ = math.ceil(len(ppl) / cols)
-    r = min(48.0, 400 / max(rows_, 1) / 2 - 14)
-    sx, sy = 150.0, (H - 110) / max(rows_, 1)
-    x0 = (W - sx * (cols - 1)) / 2
-    out = [F.bg("ink")]
-    if F.f.people_intro:
-        out.append(F.reveal(t0 + 0.3, 40, 20, 920, 50, F.text(500, 52, fit(sentences(F.f.people_intro)[-1].upper(), 22, 900, True), 22, "k", "paper", "middle"), 0.5))
-    F.ball([(t0, 500, 300, 0.0), *[(t, 500, 300, rr) for t, rr in tween(t0, 0.25, 0.0, 60.0, "back", 3)][1:], *[(t, 500, 300, rr) for t, rr in tween(t0 + 0.3, 0.12, 60.0, 0.0, "in", 2)][1:]])
-    out.append(f'<clipPath id="facecut"><circle r="{n(r)}"/></clipPath>')
-    for i, p in enumerate(ppl):
-        cx, cy = x0 + (i % cols) * sx, 90 + r + (i // cols) * sy
-        ti = t0 + 0.38 + 0.03 * i
-        initials = "".join(w[0] for w in p.name.split()[:2]).upper()
-        pic = (f'<image href="{p.face}" x="{n(-r)}" y="{n(-r)}" width="{n(2 * r)}" height="{n(2 * r)}" clip-path="url(#facecut)"/>'
-               if p.face else f'<circle r="{n(r)}" fill="{P.mix(c["ink"], c["paper"], .7)}"/>' + F.text(0, 10, initials, 28, "k", "ink", "middle"))
-        tf_ = t0 + 2.2 + 0.09 * i
-        keys = [(0, (1.0, 1.0)), (tf_, (1.0, 1.0))]
-        face, back = [(0, "inline"), (tf_ + 0.15, "none"), (tf_ + 0.45, "inline")], [(0, "none"), (tf_ + 0.15, "inline"), (tf_ + 0.45, "none")]
-        for j in range(1, 13):
-            u = j / 12
-            keys.append((tf_ + 0.6 * u, (max(0.03, abs(math.cos(math.pi * u))), 1.0)))
-        coin = (f'<circle r="{n(r + 3)}" fill="{P.mix(c["paper"], c["ink"], .3)}"/>'
-                f'<g>{F.anim("display", face, True)}{pic}</g>'
-                f'<g display="none">{F.anim("display", back, True)}<circle r="{n(r)}" fill="{P.mix(c["paper"], c["ink"], .45)}"/>'
-                + F.text(0, 10, initials, 28, "k", "ink", "middle") + "</g>")
-        fly = F.tf("translate", [(0, (500 - cx, 300 - cy)), (ti, (500 - cx, 300 - cy)), *tween(ti, 0.45, (500 - cx, 300 - cy), (0.0, 0.0), "out", 6)])
-        out.append(f'<g transform="translate({n(cx)} {n(cy)})"><g>{fly}<g>{F.tf("scale", keys)}{coin}</g>'
-                   + F.text(0, r + 26, fit(p.name, 18, sx - 8, True), 18, "b", "paper", "middle") + "</g></g>")
-    return "".join(out)
-
-
-def shot_principles(F: Film, t0: float, t1: float) -> str:
-    """How they work: each principle stamped on its plate, pushing the ones before it up the stack."""
-    items = F.f.principles[:6]
-    out = [F.bg("paper"), F.pop(t0, 50, 90, F.text(0, 0, "HOW WE WORK", 52, "k"), 1.6, 0.3),
-           f'<rect x="50" y="108" height="12" class="green">{F.anim("width", [(0, 0), *tween(t0 + 0.1, 0.4, 0.0, 200.0, "out", 4)])}</rect>']
-    step = (t1 - t0 - 0.4) / max(len(items), 1)
-    for i, s in enumerate(items):
-        ti = t0 + 0.3 + step * i
-        size = min(40.0, 820 / max(capw(s.upper(), 1), 1e-6))
-        w = capw(s.upper(), size) + 50
-        plate = ("green", "ink")[i % 2]
-        body = (f'<rect x="{n(-w / 2)}" y="{n(-size * 0.95)}" width="{n(w)}" height="{n(size * 1.5)}" class="{plate}"/>'
-                + F.text(0, size * 0.3, s.upper(), size, "k", "paper", "middle", f' textLength="{n(w - 50)}" lengthAdjust="spacingAndGlyphs"'))
-        ys = [(0, (0.0, 0.0))]
-        sc = [(0, (0.0, 0.0)), (ti, (0.0, 0.0)), *tween(ti, 0.25, (1.8, 1.8), (1.0, 1.0), "back", 5)]
-        for j in range(i + 1, len(items)):
-            tj = t0 + 0.3 + step * j
-            k = j - i
-            ys += tween(tj, 0.25, (0.0, -68.0 * (k - 1)), (0.0, -68.0 * k), "out", 4)
-            sc += tween(tj, 0.25, (0.86 ** (k - 1),) * 2, (0.86 ** k,) * 2, "out", 4)
-        rot = -2.0 if i % 2 else 2.0
-        out.append(F.at(500, 470, f'<g transform="rotate({n(rot)})">{body}</g>', F.tf("translate", ys), F.tf("scale", sc)))
+    """The people burst out of the ball onto rings, and the rings turn; nobody is singled out."""
+    people = F.f.people
+    cx, cy = W / 2, H / 2
+    out = [F.bg("paper"), tilt(cx, cy, f'<g>{F.slide(t0, 1400, 0, 0.4)}{bar(-700, -46, 1400, 92, "cyan")}</g>'),
+           F.at(cx, cy, disc(0, 0, 70, "ink"), F.tf("scale", [(0, (0.0, 0.0)), *tween(t0 + 0.05, 0.3, (0.0, 0.0), (1.0, 1.0), "back", 5)]))]
+    radii, left, R = [], len(people), 240.0
+    while left > 0 and R > 80:
+        cap = max(1, int(2 * math.pi * R / 78))
+        radii.append((R, min(cap, left)))
+        left -= min(cap, left)
+        R -= 85
+    k = 0
+    for ri, (R, m) in enumerate(radii):
+        spin = 30.0 if ri % 2 == 0 else -30.0
+        items = []
+        for j in range(m):
+            if k >= len(people):
+                break
+            p = people[k]
+            a = 2 * math.pi * j / m - math.pi / 2 + ri * 0.3
+            px, py = R * math.cos(a), R * math.sin(a)
+            cid = F.uid("face")
+            if p.face:
+                face = (f'<clipPath id="{cid}"><circle r="32"/></clipPath>'
+                        f'<image href="{p.face}" x="-32" y="-32" width="64" height="64" clip-path="url(#{cid})"/>')
+            else:
+                initials = "".join(w[0] for w in p.name.split()[:2]).upper() or p.handle[:2].upper()
+                face = disc(0, 0, 32, "alt") + F.text(0, 7, initials, 20, "k", "ink", "middle")
+            face += ring(0, 0, 32, 4, F.c["ink"])
+            ti = t0 + 0.25 + 0.04 * k
+            moved = F.tf("translate", [(0, (0.0, 0.0)), *tween(ti, 0.4, (0.0, 0.0), (px, py), "back", 6)])
+            upright = F.tf("rotate", [(0, 0.0), (t0 + 1.2, 0.0), (t1, -spin)])
+            items.append(f'<g>{moved}<g>{upright}{face}</g></g>')
+            k += 1
+        out.append(F.at(cx, cy, "".join(items), F.tf("rotate", [(0, 0.0), (t0 + 1.2, 0.0), (t1, spin)])))
+    F.ball([(t0, cx, cy, 0.0), *[(t, cx, cy, r) for t, r in tween(t0, 0.25, 0.0, 40.0, "back", 4)][1:],
+            (t0 + 0.4, cx, cy, 40.0), (t1, cx, cy, 40.0)])
     return "".join(out)
 
 
 def shot_outro(F: Film, t0: float, t1: float) -> str:
-    """Green. The H in paper, the site's name slammed down, the ball drops home -- then an ink plane
-    sweeps the frame, and it all begins again."""
-    c = F.c
-    out = [F.bg("green")]
-    hx, hy, hh = 210.0, 250.0, 260.0
-    if 'id="hshape"' not in "".join(F.sh.defs):
-        mark_defs(F.sh, F.f.logo, HEIGHT_H)
-    sx, sy, sr = _slot(F, hh)
-    Ts = 10.0
-    frames = [swing(u, 30, -10) for u in P.loop_frames(48)]
-    css, slab = P.extrude("ho", "hshape", frames, Ts, (0, 0), hh * 0.28, 20, (c["ink"], P.mix(c["ink"], c["green"], .5)), "paper")
-    F.sh.css.append(css)
-    out.append(F.at(hx, hy, f'<g transform="scale({n(hh / HEIGHT_H)})">{slab}</g>', F.tf("scale", [(0, (0.3, 0.3)), *tween(t0, 0.4, (0.3, 0.3), (1.0, 1.0), "back", 6)])))
+    """Green. The H in night, the site's name slammed down, the ball drops home in night -- then a
+    paper plane sweeps the frame, and it all begins again."""
+    sx, sy, sr = mark_defs(F.sh, F.f.logo)
+    hx, hy, k = 210.0, 260.0, 0.8
+    out = [F.bg("green"),
+           f'<g>{F.slide(t0 + 0.2, 0, 500, 0.4, "back")}{bar(380, 340, 560, 26, "night")}</g>',
+           f'<g>{F.slide(t0 + 0.3, 500, 0, 0.4, "back")}{disc(880, 110, 70, "cyan")}</g>',
+           tilt(700, 470, f'<g>{F.slide(t0 + 0.4, -1200, 0, 0.4, "back")}{bar(-300, -10, 600, 20, "pink")}</g>'),
+           F.at(hx, hy, f'<use href="#hshape" class="night" transform="scale({n(k)})"/>',
+                F.tf("scale", [(0, (0.3, 0.3)), *tween(t0, 0.4, (0.3, 0.3), (1.0, 1.0), "back", 6)]))]
     site = SITE.split("//", 1)[-1].upper()
-    size = min(96.0, 560 / capw(site, 1))
-    out.append(F.pop(t0 + 0.3, 400, 260, blockword(F, 0, 0, site, size, t0 + 0.5, "paper", (c["ink"], P.mix(c["ink"], c["green"], .4)), length=capw(site, size)), 1.8, 0.3))
-    out.append(F.reveal(t0 + 0.7, 400, 280, 560, 40, F.text(404, 312, "GITHUB.COM/HUMANFIA", 24, "t", "ink"), 0.4))
-    for j, (what, href) in enumerate(F.f.contact[:3]):
-        where = href.split("//", 1)[-1].rstrip("/")
-        ti = t0 + 1.2 + 0.15 * j
-        x = 40 + j * 312
-        out.append(f'<g>{F.slide(ti, 0, 220, 0.35, "back")}<rect x="{n(x)}" y="400" width="300" height="110" class="ink"/>'
-                   + "".join(F.text(x + 16, 432 + 22 * k, ln, 17, "b", "paper") for k, ln in enumerate(wrap(what, 17, 270, 2)))
-                   + F.text(x + 16, 494, fit(where.upper(), 13, 270), 13, "t", "green") + "</g>")
-
-    def slot(t: float) -> tuple[float, float]:
-        m = swing(((t - t0) / Ts) % 1.0, 30, -10)
-        x, y, _ = P.apply(m, (sx * hh / HEIGHT_H, sy * hh / HEIGHT_H, 8.0))
-        return hx + x, hy + y
-
-    rr = sr * hh / HEIGHT_H
-    land = t0 + 1.0
-    pts = [(land - 0.4, slot(land)[0], -60, rr), *[(t, slot(t)[0], y, rr) for t, y in tween(land - 0.4, 0.4, -60.0, slot(land)[1], "in", 5)][1:]]
-    t = land
-    while t < t1 - 0.1:
-        t += 0.15
-        pts.append((t, *slot(t), rr))
-    F.ball([(t_, x, y, r_) for t_, x, y, r_ in pts])
+    size = min(92.0, 560 / max(capw(site, 1), 1e-6))
+    out.append(slam(F, t0 + 0.3, 380, 300, site, size, "night"))
+    slot = (hx + sx * k, hy + sy * k, sr * k)
+    land = t0 + 0.9
+    F.ball([(land - 0.4, slot[0], -60, slot[2]), *[(t, slot[0], y, slot[2]) for t, y in tween(land - 0.4, 0.4, -60.0, slot[1], "in", 5)][1:],
+            *[(t, slot[0], slot[1], r) for t, r in tween(land, 0.2, slot[2] * 1.4, slot[2], "back", 3)], (t1, *slot)])
     F.ball_ink = (land - 0.4, t1)
     out.append(f'<g>{F.tf("translate", [(0, (1500.0, 0.0)), (t1 - 0.45, (1500.0, 0.0)), (t1, (0.0, 0.0))])}'
-               f'<polygon points="{n(-200)},0 {n(W + 200)},0 {n(W + 200)},{n(H)} {n(-200 - H * SLOPE * 2)},{n(H)}" class="ink"/></g>')
+               f'<polygon points="{n(-200)},0 {n(W + 200)},0 {n(W + 200)},{n(H)} {n(-200 - H * SLOPE * 2)},{n(H)}" class="paper"/></g>')
     return "".join(out)
 
 
-def _slot(F: Film, hh: float) -> tuple[float, float, float]:
-    vx, vy, vw, vh = F.f.logo.viewbox
-    s = HEIGHT_H / vh
-    dx, dy, dr = F.f.logo.dot if F.f.logo.dot else (vx + vw * 0.875, vy + vh * 0.11, vw * 0.125)
-    return (dx - vx - vw / 2) * s, (dy - vy - vh / 2) * s, dr * s
+SOLO = 8      # achievements with a shot of their own, at least: every new one gets one
+PAGE = 12     # achievements on a wall
 
 
-def storyboard(f: Facts) -> list[Shot]:
-    """The cut: a section is in only if the site gave it something to say."""
-    s = [Shot("drop", 2.8, shot_drop), Shot("mark", 3.6, shot_mark)]
+def storyboard(f: Facts, today: dt.date | None = None) -> list[Shot]:
+    """The cut: a section is in only if the site gave it something to show."""
+    today = today or dt.date.today()
+    s = [Shot("open", 3.2, shot_open), Shot("mark", 3.2, shot_mark)]
     if f.headline:
-        s.append(Shot("headline", 3.4, shot_headline, "whip"))
-    for i, act in enumerate(f.acts[:5]):
-        s.append(Shot(f"act{i}", 2.5, shot_act(i, act, i == len(f.acts[:5]) - 1), "punch"))
+        s.append(Shot("headline", 3.0, shot_headline, "whip"))
     num = 0
 
-    def bump(title: str) -> None:
+    def wipe(title: str, ground: str) -> None:
         nonlocal num
         num += 1
-        s.append(Shot(f"bump-{title}", 1.5, shot_bumper(num, title)))
+        s.append(Shot(f"wipe-{title}", 1.1, shot_wipe(num, title, ground), "whip"))
 
     if f.bands:
-        bump("The runtime")
-        s.append(Shot("humanize", 2.4, shot_humanize))
-        s.append(Shot("tower", 1.4 + 1.3 * len(f.bands[:4]), shot_tower, "whip"))
-        env = next((b.chips for b in f.bands if b.title.lower().startswith("environment")), [])
-        for i, (h3, p) in enumerate(f.features[:3]):
-            s.append(Shot(f"feature{i}", 2.6, shot_feature(i, h3, p, env), "punch"))
+        wipe("Runtime", "cyan")
+        s.append(Shot("runtime", 1.4 + 0.5 * len(f.bands[:5]), shot_runtime, "punch"))
     if f.flows:
-        bump("The flows")
-        s.append(Shot("flows", 2.2, shot_count("Flows", len(f.flows), "loops around the agents")))
-        for i, fl in enumerate(f.flows):
-            s.append(Shot(f"flow{i}", 1.1, shot_flow(i, len(f.flows), fl)))
+        num += 1
+        s.append(Shot("flows", 1.6, shot_count("Flows", len(f.flows), "green"), "whip"))
+        kinds: dict[str, list[Flow]] = {}
+        for fl in f.flows:
+            kinds.setdefault(kind_of(fl), []).append(fl)
+        for i, (kind, fls) in enumerate(kinds.items()):
+            tag = next((fl.tag for fl in fls if fl.tag), kind)
+            s.append(Shot(f"kind-{kind}", 1.2, shot_flowkind(i, kind, tag, len(fls)), "punch"))
     if f.projects:
-        bump("Projects")
-        for i, p in enumerate(f.projects[:6]):
-            s.append(Shot(f"project{i}", 2.8, shot_project(i, p), "whip"))
-    if f.results:
-        bump("Results")
-        for i, r in enumerate(f.results[:12]):
-            s.append(Shot(f"result{i}", 1.6, shot_result(i, r), "punch"))
-    if f.posts:
-        bump("Latest")
-        for i, p in enumerate(f.posts[:5]):
-            s.append(Shot(f"post{i}", 2.2, shot_post(i, p), "rise"))
+        wipe("Projects", "lav")
+        for i, p in enumerate(f.projects[:8]):
+            s.append(Shot(f"project{i}", 1.4, shot_project(i, p), "whip"))
+    if f.achievements:
+        num += 1
+        s.append(Shot("achievements", 1.6, shot_count("Achievements", len(f.achievements), "pink"), "whip"))
+        order = lineup(f.achievements, today)
+        new = sum(fresh(a, today) for a in order)
+        solo = order[:max(SOLO, new)]
+        for i, a in enumerate(solo):
+            s.append(Shot(f"achievement{i}", 1.5, shot_achievement(i, a, fresh(a, today)), "punch"))
+        rest = order[len(solo):]
+        per = math.ceil(len(rest) / math.ceil(len(rest) / PAGE)) if rest else PAGE
+        for k in range(0, len(rest), per):
+            page = rest[k:k + per]
+            s.append(Shot(f"wall{k // per}", 1.3 + 0.08 * len(page), shot_wall(page, k), "rise"))
     if f.people:
-        bump("The people")
-        s.append(Shot("people", 5.6, shot_people))
-    if f.principles:
-        s.append(Shot("principles", 1.0 + 1.3 * len(f.principles[:6]), shot_principles, "whip"))
-    s.append(Shot("outro", 6.5, shot_outro))
+        wipe("People", "gold")
+        s.append(Shot("people", 3.4, shot_people, "punch"))
+    s.append(Shot("outro", 3.4, shot_outro))
     return s
 
 
-def film(theme: str, f: Facts) -> str:
+def film(theme: str, f: Facts, today: dt.date | None = None) -> str:
     """The banner: every shot on one clock, cut together, with the ball on top of them all."""
-    plan = storyboard(f)
+    plan = storyboard(f, today)
     T = sum(s.seconds for s in plan)
     F = Film(theme, f, T)
-    F.ball_ink = None
     layers, t = [], 0.0
     nexts = [s.enter for s in plan[1:]] + ["cut"]
     for s, nxt in zip(plan, nexts):
@@ -1602,22 +1565,21 @@ def film(theme: str, f: Facts) -> str:
         moves = []
         if s.enter == "whip":
             a = t0 - 0.16
-            moves.append(F.tf("translate", [(0, (W + 40, 0.0)), *tween(a, 0.34, (W + 40, 0.0), (0.0, 0.0), "out", 6)]))
+            moves.append(F.tf("translate", [(0, (W + 40, 0.0)), *tween(a, 0.3, (W + 40, 0.0), (0.0, 0.0), "out", 6)]))
         elif s.enter == "punch":
-            moves.append(F.tf("scale", [(0, (1.18, 1.18)), *tween(t0, 0.22, (1.18, 1.18), (1.0, 1.0), "out", 4)]))
+            moves.append(F.tf("scale", [(0, (1.15, 1.15)), *tween(t0, 0.2, (1.15, 1.15), (1.0, 1.0), "out", 4)]))
         elif s.enter == "rise":
             moves.append(F.tf("translate", [(0, (0.0, H)), *tween(t0, 0.3, (0.0, H), (0.0, 0.0), "out", 5)]))
         if nxt == "whip":
             moves.append(F.tf("translate", [(0, (0.0, 0.0)), *tween(t1 - 0.16, 0.16, (0.0, 0.0), (-W - 40, 0.0), "in", 4)]))
-            b = t1 + 0.18
+            b = t1 + 0.16
         inner = body
         for m in moves:
             inner = (f'<g transform="translate({n(W / 2)} {n(H / 2)})"><g>{m}<g transform="translate({n(-W / 2)} {n(-H / 2)})">{inner}</g></g></g>'
                      if "scale" in m[:80] else f"<g>{m}{inner}</g>")
         layers.append(f'<g display="{"inline" if a <= 0 else "none"}">{F.show(a, b)}{inner}</g>')
-        if nxt == "whip":  # the whip's speed lines
-            streaks = "".join(f'<rect x="0" y="{n(60 + 90 * k)}" width="{n(300 + 120 * (k % 3))}" height="{n(6 + 4 * (k % 2))}" class="{"green" if k % 2 else "ink"}"/>'
-                              for k in range(5))
+        if nxt == "whip":  # the whip's speed lines, in every colour
+            streaks = "".join(bar(0, 50 + 95 * k, 260 + 120 * (k % 3), 8 + 6 * (k % 2), ACCENTS[k % len(ACCENTS)]) for k in range(5))
             layers.append(f'<g display="none">{F.show(t1 - 0.2, t1 + 0.2)}<g>{F.tf("translate", [(0, (W, 0.0)), (t1 - 0.2, (W, 0.0)), (t1 + 0.2, (-700.0, 0.0))])}{streaks}</g></g>')
         t = t1
     # The ball: one actor, on top of every shot it is in.
@@ -1625,21 +1587,17 @@ def film(theme: str, f: Facts) -> str:
     on = [(0.0, "0")]
     for a, b in sorted(F.ball_on):
         on += [(a, "1"), (b, "0")]
-    xs = [(tt, v[0]) for tt, v in keys]
-    ys = [(tt, v[1]) for tt, v in keys]
-    rs = [(tt, v[2]) for tt, v in keys]
-    fill = F.sh.ball()
-    motion = F.anim("cx", xs) + F.anim("cy", ys) + F.anim("r", rs)
-    if F.ball_ink:  # at the end the ball is ink, on green
+    motion = (F.anim("cx", [(tt, v[0]) for tt, v in keys]) + F.anim("cy", [(tt, v[1]) for tt, v in keys])
+              + F.anim("r", [(tt, v[2]) for tt, v in keys]))
+    if F.ball_ink:  # at the end the ball is night, on green
         a, b = F.ball_ink
-        red_on = [(tt, v if not (a <= tt < b) else "0") for tt, v in on] + [(a, "0"), (b, "0")]
-        red_on = sorted(red_on, key=lambda k: k[0])
-        ink_on = [(0.0, "0"), (a, "1"), (b, "0")]
-        ball = (f'<circle r="0" fill="{fill}">{motion}{F.anim("opacity", red_on, True)}</circle>'
-                f'<circle r="0" class="ink">{motion}{F.anim("opacity", ink_on, True)}</circle>')
+        green_on = sorted([(tt, v if not (a <= tt < b) else "0") for tt, v in on] + [(a, "0"), (b, "0")], key=lambda k: k[0])
+        ball = (f'<circle r="0" class="green">{motion}{F.anim("opacity", green_on, True)}</circle>'
+                f'<circle r="0" class="night">{motion}{F.anim("opacity", [(0.0, "0"), (a, "1"), (b, "0")], True)}</circle>')
     else:
-        ball = f'<circle r="0" fill="{fill}">{motion}{F.anim("opacity", on, True)}</circle>'
+        ball = f'<circle r="0" class="green">{motion}{F.anim("opacity", on, True)}</circle>'
     return F.sh.render("".join(layers) + ball)
+
 
 README = """<a href="{site}">
   <picture>
@@ -1652,8 +1610,9 @@ README = """<a href="{site}">
 
 
 def readme(f: Facts) -> str:
-    alt = (f"Humanfia: {f.headline or 'we build the flow around the agents'} A tour, in one shot, of the mark, "
-           "the projects, the runtime, the flows, the results, the latest news and the people, generated from humanfia.ai.")
+    alt = (f"Humanfia: {f.headline or 'we build the flow around the agents'} A one-minute constructivist film of "
+           f"the mark, the runtime, the flows, the projects, {len(f.achievements)} achievements and the people, "
+           "generated from humanfia.ai.")
     return README.format(site=SITE, alt=esc(" ".join(alt.split())))
 
 
@@ -1662,11 +1621,17 @@ def readme(f: Facts) -> str:
 def main() -> None:
     themes = [os.environ["THEME"]] if os.environ.get("THEME") else ["light", "dark"]
     facts = gather()
+    today = dt.date.today()
+    old = load_ledger()
+    facts.achievements = achievements(facts, old, today, lambda path: fetch(path) is not None)
+    added = {a.href for a in facts.achievements} - {r["href"] for r in old}
     for theme in themes:
         out = PROFILE / f"humanfia-portfolio-{theme}.svg"
-        out.write_text(film(theme, facts), encoding="utf-8")
+        out.write_text(film(theme, facts, today), encoding="utf-8")
         print(f"wrote {out.relative_to(ROOT)} ({out.stat().st_size // 1024} KB)")
     (PROFILE / "README.md").write_text(readme(facts), encoding="utf-8")
+    save_ledger(facts.achievements)
+    print(f"{len(facts.achievements)} achievements, {len(added)} new: {', '.join(sorted(added)) or 'none'}")
     if (PROFILE / ART).exists():
         shutil.rmtree(PROFILE / ART)  # the poster wall this replaced
 

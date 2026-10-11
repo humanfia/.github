@@ -4,6 +4,8 @@
 # there if it is the one `profile/.source-sha` says the profile was last built from. A run by
 # hand does the same unless `force` is ticked. Once a day and on a `humanfia-ai-deployed`
 # dispatch it rebuilds regardless. A run that changes nothing commits nothing.
+# Each build also adds any achievement humanfia.ai has newly announced to profile/achievements.json,
+# so a new news post or home-page tile reaches the banner with the deploy that published it.
 
 name: profile
 

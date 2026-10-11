@@ -1,17 +1,19 @@
-"""Offline tests for gen_portfolio.py and proun.py: how the site is read, and the posters drawn.
+"""Offline tests for gen_portfolio.py: how the site is read, the achievements kept, and the film cut.
 
     python3 -m unittest discover -s tools -p 'test_*.py'
 """
 
 import io
 import re
+import tempfile
 import unittest
 import urllib.error
+from datetime import date
+from pathlib import Path
 from unittest import mock
 from xml.etree import ElementTree as ET
 
 import gen_portfolio as g
-import proun as P
 
 NAV = """<nav class="VPNavBarMenu menu"><span>Main Navigation</span>
 <div class="VPFlyout VPNavBarMenuGroup"><button type="button" class="button"><span class="text"><span>Projects</span></span></button>
@@ -77,7 +79,8 @@ def facts() -> g.Facts:
     with mock.patch.object(g, "fetch", return_value=FLOWS):
         g.flow_facts(f, g.parse_nav(g.dom(NAV)))
     f.projects = [g.Project("KDA", "https://humanfia.ai/projects/kda", "Kernel Design Agents", "An agent workflow.")]
-    f.posts = [g.Post("NEWS", "Title & <more>", "https://x", 0, "Oct 2, 2026", "Ann")]
+    f.achievements = [g.Achievement("/news/imo", "6/6", "IMO 2026 & <more>", "2026-07-18"),
+                      g.Achievement("/news/lean", "#1", "on Lean-Eval", "2026-10-04")]
     f.people = [g.Person("Zijian Zhang", "futrime"), g.Person("Ann Bo", "annbo", "data:image/png;base64,AAAA")]
     f.principles, f.contact = ["The builder is not the judge.", "Build in public."], [("A question", "https://github.com/humanfia")]
     return f
@@ -141,7 +144,8 @@ class Reading(unittest.TestCase):
 
     def test_feed_reads_authors_and_survives_a_missing_feed(self) -> None:
         with mock.patch.object(g, "fetch", side_effect=lambda p: RSS if "news" in p else None):
-            posts = g.latest()
+            posts = g.feed("/news/feed.rss", "NEWS")
+            self.assertEqual(g.feed("/blog/feed.rss", "BLOG"), [])
         self.assertEqual([(p.kind, p.title, p.date, p.by) for p in posts], [("NEWS", "A", "Oct 2, 2026", "Ann, Bo")])
 
 
@@ -181,35 +185,83 @@ class Logo(unittest.TestCase):
         self.assertIn('xlink:href="#logo-p"', logo.body)
 
 
-class Geometry(unittest.TestCase):
-    def test_rotations_are_orthonormal(self) -> None:
-        m = P.rot(37, -21, 8)
-        for i in range(3):
-            for j in range(3):
-                self.assertAlmostEqual(sum(m[i][k] * m[j][k] for k in range(3)), float(i == j))
+class Achievements(unittest.TestCase):
+    TODAY = date(2026, 10, 11)
 
-    def test_a_solid_shows_each_face_only_while_it_faces_you(self) -> None:
-        cube = P.box(10, 10, 10)
-        front = P.rot(0, 0)
-        svg = cube.draw([front, front], 1, (0, 0), 1, "#ffffff", "#000000")
-        self.assertEqual(svg.count("<path"), 1)  # head on, a cube is one square
+    def test_a_titles_headline_number(self) -> None:
+        cases = {
+            "78.2% MLE-bench medal rate in 6 hours": ("78.2%", "MLE-bench medal rate in 6 hours"),
+            "#1 on Lean-Eval v1 first solves": ("#1", "on Lean-Eval v1 first solves"),
+            "30/30 IPhO, 6/6 IOI, 100/100 IBO": ("30/30", "IPhO, 6/6 IOI, 100/100 IBO"),
+            "17,520 QCode definitions across 21 lattices": ("17,520", "QCode definitions across 21 lattices"),
+            "40+ agent-tuned operators in SGLang": ("40+", "agent-tuned operators in SGLang"),
+            "0% + 0.5% → 3.5% on ProgramBench": ("3.5%", "0% + 0.5% → 3.5% on ProgramBench"),
+            "Biohub final: #188 of 3,947, top 5%": ("#188", "Biohub final: #188 of 3,947, top 5%"),
+            "A 567-file CMake port of gem5": ("", "A 567-file CMake port of gem5"),
+        }
+        for title, want in cases.items():
+            self.assertEqual(g.headline_number(title), want, title)
 
-    def test_the_odometer_lands_on_each_digit(self) -> None:
-        svg, _ = P.odometer(0, 50, "6/6", 40, "k", 10, 0.3, 30, "o")
-        for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
-            ys = [float(v.split()[1]) for v in values.split(";")]
-            self.assertAlmostEqual(ys[2] / (-40 * 1.22), 26)  # 20 + 6: two turns, then the 6
-            self.assertEqual([float(t) for t in times.split(";")], sorted(float(t) for t in times.split(";")))
+    def test_what_each_number_is(self) -> None:
+        self.assertEqual(g.figure("672/672"), ("frac", (672.0, 672.0)))
+        self.assertEqual(g.figure("#1"), ("rank", (1.0,)))
+        self.assertEqual(g.figure("+8.7%"), ("lift", (8.7,)))
+        self.assertEqual(g.figure("78.2%"), ("pct", (78.2,)))
+        self.assertEqual(g.figure("6.5×"), ("times", (6.5,)))
+        self.assertEqual(g.figure("17,520"), ("count", (17520.0,)))
+        self.assertEqual(g.figure("0.7639"), ("score", (0.7639,)))
+        self.assertEqual(g.figure("✓"), ("mark", ()))
+
+    def facts(self) -> g.Facts:
+        f = g.Facts(g.parse_logo(LOGO))
+        f.news = [g.Post("NEWS", "6/6 at IMO 2026, Lean-checked", "https://humanfia.ai/news/imo", 1784332800, ""),   # Jul 18
+                  g.Post("NEWS", "#1 on Lean-Eval", "https://humanfia.ai/news/lean/", 1791072000, "")]            # Oct 4
+        f.results = [g.Result("IMO 2026", "6/6", "Every problem.", "https://humanfia.ai/news/imo")]
+        return f
+
+    def test_every_post_and_tile_is_added_and_tiles_word_it(self) -> None:
+        got = g.achievements(self.facts(), [], self.TODAY, lambda p: True)
+        self.assertEqual([(a.href, a.num, a.label, a.date, a.added, a.featured) for a in got],
+                         [("/news/lean", "#1", "on Lean-Eval", "2026-10-04", "2026-10-11", -1),
+                          ("/news/imo", "6/6", "IMO 2026", "2026-07-18", "2026-10-11", 0)])
+
+    def test_the_ledger_remembers_and_only_forgets_what_is_gone(self) -> None:
+        old = [{"href": "/news/imo", "num": "6/6", "label": "x", "date": "2026-07-18", "added": "2026-07-20"},
+               {"href": "/news/old", "num": "71", "label": "Kept", "date": "2026-06-22", "added": "2026-06-23"},
+               {"href": "/news/pulled", "num": "1", "label": "Gone", "date": "2026-06-01", "added": "2026-06-02"}]
+        asked = []
+        got = g.achievements(self.facts(), old, self.TODAY, lambda p: asked.append(p) or p != "/news/pulled")
+        self.assertEqual([a.href for a in got], ["/news/lean", "/news/imo", "/news/old"])
+        self.assertEqual(sorted(asked), ["/news/old", "/news/pulled"])
+        self.assertEqual(got[1].added, "2026-07-20")   # first seen then, not now
+        self.assertEqual(got[0].added, "2026-10-11")
+
+    def test_the_ledger_round_trips(self) -> None:
+        got = g.achievements(self.facts(), [], self.TODAY, lambda p: True)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "achievements.json"
+            self.assertEqual(g.load_ledger(path), [])
+            g.save_ledger(got, path)
+            self.assertEqual(g.load_ledger(path), [a.record() for a in got])
+
+    def test_new_first_then_featured_then_the_rest(self) -> None:
+        a = [g.Achievement("/a", "1", "a", "2026-10-05"), g.Achievement("/b", "1", "b", "2026-09-01"),
+             g.Achievement("/c", "1", "c", "2026-08-01", featured=0)]
+        self.assertEqual([x.href for x in g.lineup(a, self.TODAY)], ["/a", "/c", "/b"])
+        self.assertTrue(g.fresh(a[0], self.TODAY))
+        self.assertFalse(g.fresh(a[1], self.TODAY))
 
 
 class Spot(unittest.TestCase):
+    TODAY = date(2026, 10, 11)
+
     def setUp(self) -> None:
         self.f = facts()
-        self.films = {theme: g.film(theme, self.f) for theme in ("light", "dark")}
+        self.films = {theme: g.film(theme, self.f, self.TODAY) for theme in ("light", "dark")}
 
     def film_of(self, shot: str) -> str:
         """One shot's svg, drawn on a clock of the whole cut."""
-        plan = g.storyboard(self.f)
+        plan = g.storyboard(self.f, self.TODAY)
         F = g.Film("light", self.f, sum(s.seconds for s in plan))
         t = 0.0
         for s in plan:
@@ -221,48 +273,62 @@ class Spot(unittest.TestCase):
     def test_well_formed_in_both_themes_with_every_section(self) -> None:
         for svg in self.films.values():
             ET.fromstring(svg)
-        names = [s.name for s in g.storyboard(self.f)]
-        self.assertEqual(names[:3], ["drop", "mark", "headline"])
-        for part in ("act0", "bump-The runtime", "tower", "feature0", "flows", "flow1", "bump-Projects", "project0",
-                     "result0", "post0", "people", "principles"):
+        names = [s.name for s in g.storyboard(self.f, self.TODAY)]
+        self.assertEqual(names[:3], ["open", "mark", "headline"])
+        for part in ("wipe-Runtime", "runtime", "flows", "kind-relay", "kind-lanes", "wipe-Projects", "project0",
+                     "achievements", "achievement0", "wipe-People", "people"):
             self.assertIn(part, names)
         self.assertEqual(names[-1], "outro")
 
-    def test_cut_like_a_spot_of_more_than_two_minutes(self) -> None:
+    def test_about_a_minute_however_much_the_site_says(self) -> None:
         f = self.f
         f.flows = f.flows * 7
-        f.results = f.results * 12
         f.projects = [f.projects[0]] * 5
-        f.posts = f.posts * 5
         f.people = f.people * 9
-        f.acts = f.acts * 2
-        f.features = f.features * 3
-        plan = g.storyboard(f)
-        self.assertGreaterEqual(sum(s.seconds for s in plan), 120)
-        self.assertLessEqual(max(s.seconds for s in plan), 6.5)        # no shot lingers
-        self.assertLess(sum(s.seconds for s in plan) / len(plan), 2.6)  # most are a beat or two
+        f.achievements = [g.Achievement(f"/news/{i}", f"{i}/40", f"Result {i}", "2026-01-01") for i in range(30)]
+        plan = g.storyboard(f, self.TODAY)
+        self.assertLessEqual(sum(s.seconds for s in plan), 75)
+        self.assertLessEqual(max(s.seconds for s in plan), 3.5)        # no shot lingers
+
+    def test_every_achievement_is_broadcast_and_every_new_one_alone(self) -> None:
+        f = self.f
+        f.achievements = ([g.Achievement(f"/news/n{i}", f"{i + 1}/9", f"New {i}", "2026-10-0" + str(i + 1)) for i in range(9)]
+                          + [g.Achievement(f"/news/o{i}", f"#{i + 1}", f"Old {i}", "2025-01-01") for i in range(20)])
+        plan = g.storyboard(f, self.TODAY)
+        solo = [s for s in plan if s.name.startswith("achievement") and s.name != "achievements"]
+        walls = [s for s in plan if s.name.startswith("wall")]
+        self.assertEqual(len(solo), 9)                                   # more than SOLO: all nine are new
+        self.assertEqual(len(walls), 2)                                  # twenty more, on two walls
+        svg = g.film("light", f, self.TODAY)
+        for a in f.achievements:
+            self.assertIn(f">{a.label}<", svg)
+        self.assertEqual(svg.count(">NEW<"), 9)
 
     def test_sections_without_a_source_are_left_out(self) -> None:
         bare = g.Facts(g.parse_logo(LOGO))
-        self.assertEqual([s.name for s in g.storyboard(bare)], ["drop", "mark", "outro"])
-        ET.fromstring(g.film("dark", bare))
+        self.assertEqual([s.name for s in g.storyboard(bare, self.TODAY)], ["open", "mark", "outro"])
+        ET.fromstring(g.film("dark", bare, self.TODAY))
 
     def test_one_clock_and_valid_key_times(self) -> None:
         svg = self.films["dark"]
-        T = sum(s.seconds for s in g.storyboard(self.f))
-        self.assertEqual({float(d) for d in re.findall(r'<animate[^>]*dur="([\d.]+)s" repeatCount="indefinite"[^>]*keyTimes', svg)}, {round(T, 2)})
+        T = sum(s.seconds for s in g.storyboard(self.f, self.TODAY))
+        self.assertEqual({float(d) for d in re.findall(r'dur="([\d.]+)s"', svg)}, {round(T, 2)})
         for values, times in re.findall(r'values="([^"]*)" keyTimes="([^"]*)"', svg):
             ts = [float(t) for t in times.split(";")]
             self.assertEqual((ts[0], ts[-1]), (0.0, 1.0))
             self.assertEqual(ts, sorted(ts))
             self.assertEqual(len(ts), len(values.split(";")))
 
-    def test_ids_and_keyframes_are_unique(self) -> None:
-        svg = self.films["light"]
-        ids = re.findall(r'\bid="([^"]+)"', svg)
+    def test_flat_and_in_the_sites_colours(self) -> None:
+        for theme, svg in self.films.items():
+            self.assertNotIn("@keyframes", svg)       # no extruded solids
+            self.assertNotIn("Gradient", svg)         # flat colour only
+            colours = {c.lower() for c in re.findall(r"#[0-9a-fA-F]{6}\b", svg)}
+            self.assertLessEqual(colours, set(g.THEMES[theme].values()), theme)
+
+    def test_ids_are_unique(self) -> None:
+        ids = re.findall(r'\bid="([^"]+)"', self.films["light"])
         self.assertEqual(len(ids), len(set(ids)))
-        frames = re.findall(r"@keyframes ([\w-]+)", svg)
-        self.assertEqual(len(frames), len(set(frames)))
 
     def test_no_text_under_13px(self) -> None:
         sizes = [float(s) for s in re.findall(r"font-size:([\d.]+)px", self.films["light"])]
@@ -276,12 +342,13 @@ class Spot(unittest.TestCase):
     def test_no_one_is_marked_out_among_the_people(self) -> None:
         shot = self.film_of("people")
         self.assertNotIn('class="green"', shot)
-        self.assertNotIn(g.THEMES["light"]["green"], shot)
         self.assertNotIn("saturate", shot)  # faces in their own colours
         self.assertIn("data:image/png;base64,AAAA", shot)
 
-    def test_the_runtime_marks_the_native_model_call(self) -> None:
-        self.assertRegex(self.film_of("tower"), r'class="green"/><text[^>]*>litellm · a model call')
+    def test_the_runtime_is_green_where_humanize_is(self) -> None:
+        f = self.f
+        f.bands[1].title = "humanize"
+        self.assertRegex(self.film_of("runtime"), r'class="green"/><text[^>]*>HUMANIZE<')
 
     def test_the_readme_is_the_film_linked_to_the_site(self) -> None:
         md = g.readme(self.f)
