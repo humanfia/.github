@@ -58,8 +58,9 @@ newer commit, in a pull request of its own.
 - `profile/README.md` is the page GitHub shows on the org's overview tab. It holds only the banner, a `<picture>`
   that picks the light or dark SVG with `prefers-color-scheme`, linked to humanfia.ai.
 - `profile/humanfia-portfolio-{light,dark}.svg` is a film of about a minute, one per colour scheme, in flat
-  constructivist planes: discs, wedges and bars on the logo's one-in-three diagonal, block capitals, and humanfia.ai's
-  own colours (its paper and ink, green, cyan, pink, lavender and gold). There is no 3D. Words are kept to names and
+  constructivist planes: discs, wedges and bars on the logo's one-in-three diagonal, and block capitals, coloured the
+  way humanfia.ai is: paper and ink almost everywhere, green as the one loud colour, cyan as its quiet second, and
+  pink only for the NEW stamp. The dark banner stays dark from start to end. There is no 3D. Words are kept to names and
   numbers, and everything else is shown in motion. The green ball, the dot of the H, runs through every shot. Its sections:
   1. the mark and the headline
   2. the Humanize runtime: a stair of bars the ball falls through
