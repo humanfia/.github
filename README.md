@@ -81,7 +81,7 @@ newer commit, in a pull request of its own.
   - from humanfia.ai: the logo; the home page's headline and achievement tiles; the Projects menu and each
     project's page; the `/flows/` catalogue; `/news/feed.rss`, every post of which is an achievement; and About (and
     Team) for the people
-  - from docs.humanfia.ai: the "how it fits together" bands
+  - from humanfia.ai/humanize/ (Humanize's own site, built from humanfia/humanize): the "how it fits together" bands
 
   A chapter whose source is missing (a 404 or 410, or markup without the parts it needs) is left out. Any other
   failure exits non-zero and changes nothing.

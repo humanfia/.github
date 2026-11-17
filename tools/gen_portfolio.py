@@ -57,7 +57,7 @@ from typing import Callable, Iterator
 from xml.etree import ElementTree as ET
 
 SITE = os.environ.get("SITE", "https://humanfia.ai").rstrip("/")
-DOCS = os.environ.get("DOCS", "https://docs.humanfia.ai/humanize").rstrip("/")
+DOCS = os.environ.get("DOCS", "https://humanfia.ai/humanize").rstrip("/")
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = ROOT / "profile"
 ART = "art"  # where the poster wall this replaced lived; removed on sight
