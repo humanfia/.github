@@ -8,8 +8,8 @@ SUPPORT.md of its own.
 Most questions are answered already, and these answer faster than a person can:
 
 - The repository's README: what it is, how to run it, and where its documentation is.
-- [The documentation](https://docs.humanfia.ai/), for the projects that have it, such as
-  [humanize](https://docs.humanfia.ai/humanize/).
+- [The documentation](https://humanfia.ai/), for the projects that have it, such as
+  [humanize](https://humanfia.ai/humanize/).
 - The repository's issues, open and closed: someone may have asked before.
 
 ## Then ask

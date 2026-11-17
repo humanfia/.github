@@ -78,7 +78,7 @@ def facts() -> g.Facts:
     g.docs_facts(f, g.dom(DOCS))
     with mock.patch.object(g, "fetch", return_value=FLOWS):
         g.flow_facts(f, g.parse_nav(g.dom(NAV)))
-    f.projects = [g.Project("KDA", "https://humanfia.ai/projects/kda", "Kernel Design Agents", "An agent workflow.")]
+    f.projects = [g.Project("KDA", "https://humanfia.ai/kda/", "Kernel Design Agents", "An agent workflow.")]
     f.achievements = [g.Achievement("/news/imo", "6/6", "IMO 2026 & <more>", "2026-07-18"),
                       g.Achievement("/news/lean", "#1", "on Lean-Eval", "2026-10-04")]
     f.people = [g.Person("Zijian Zhang", "futrime"), g.Person("Ann Bo", "annbo", "data:image/png;base64,AAAA")]
